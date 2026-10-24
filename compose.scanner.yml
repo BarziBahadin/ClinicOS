@@ -1,0 +1,20 @@
+services:
+  scanner:
+    image: clamav/clamav:1.5.4-debian@sha256:d7ede3cefeaf3b8a72ebcdee849d13f504bbca3f3b3cfade5bc7b6ee06a4f62c
+    container_name: clinicos-scanner
+    restart: unless-stopped
+    volumes:
+      - scanner-definitions:/var/lib/clamav
+    networks:
+      - local
+    healthcheck:
+      test: ["CMD", "clamdscan", "--ping", "1"]
+      interval: 30s
+      timeout: 10s
+      retries: 20
+networks:
+  local:
+    name: clinicos-local
+    external: true
+volumes:
+  scanner-definitions:

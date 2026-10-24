@@ -1,0 +1,86 @@
+{
+  "name": "clinicos",
+  "version": "0.1.0",
+  "description": "Bilingual dermatology clinic management",
+  "main": "electron/main.cjs",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "db:start": "tsx scripts/start-local.ts",
+    "db:test": "tsx scripts/database-tests.ts",
+    "local:setup": "tsx scripts/local-setup.ts",
+    "desktop": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "desktop:build": "npm run build && tsx scripts/build-desktop.ts",
+    "format": "prettier --write src scripts tests electron vite.config.ts tsconfig.json",
+    "check": "npm run typecheck && npm test && npm run build",
+    "setup": "npm run db:start && npm run local:setup",
+    "functions:serve": "supabase functions serve --network-id clinicos-local --env-file .local/functions.env",
+    "functions:check": "deno check --config supabase/functions/deno.json supabase/functions/staff-admin/index.ts supabase/functions/clinical-media/index.ts",
+    "backup:local": "tsx scripts/backup-local.ts",
+    "db:advisors": "supabase db advisors --local --level warn --fail-on warn"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@fontsource/noto-sans-arabic": "5.3.0",
+    "@js-temporal/polyfill": "0.5.1",
+    "@supabase/supabase-js": "2.118.0",
+    "decimal.js": "10.6.0",
+    "electron-updater": "6.8.11",
+    "libphonenumber-js": "1.13.15",
+    "lucide-react": "1.61.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@testing-library/react": "16.3.3",
+    "@testing-library/user-event": "14.6.8",
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.2",
+    "concurrently": "10.0.6",
+    "deno": "2.9.6",
+    "electron": "45.0.0",
+    "electron-builder": "26.18.0",
+    "happy-dom": "21.0.4",
+    "otpauth": "9.5.2",
+    "pg": "8.23.1",
+    "prettier": "3.9.10",
+    "supabase": "2.122.0",
+    "tsx": "4.23.15",
+    "typescript": "7.0.2",
+    "vite": "8.3.5",
+    "vitest": "5.0.5",
+    "wait-on": "9.5.1"
+  },
+  "private": true,
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "build": {
+    "appId": "com.clinicos.desktop",
+    "productName": "ClinicOS",
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "package.json"
+    ],
+    "directories": {
+      "output": "release"
+    },
+    "mac": {
+      "category": "public.app-category.medical",
+      "hardenedRuntime": true
+    },
+    "win": {
+      "target": "nsis"
+    }
+  }
+}

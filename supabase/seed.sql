@@ -1,0 +1,1 @@
+-- Intentionally no production seed data. Use npm run local:setup for synthetic local fixtures.

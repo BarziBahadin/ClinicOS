@@ -1,0 +1,40 @@
+name: ClinicOS verification
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci
+      - run: npm run db:start
+      - run: npm run local:setup
+      - name: Start trusted functions
+        run: |
+          npm run functions:serve > .local/functions.log 2>&1 &
+          for attempt in $(seq 1 30); do
+            code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:54321/functions/v1/clinical-media || true)
+            if [ "$code" = 401 ] || [ "$code" = 405 ]; then exit 0; fi
+            sleep 2
+          done
+          exit 1
+      - name: Wait for scanner
+        run: |
+          for attempt in $(seq 1 40); do
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' clinicos-scanner)" = healthy ]; then exit 0; fi
+            sleep 3
+          done
+          exit 1
+      - run: npm run check
+      - run: npm run functions:check
+      - run: npm run db:test -- --media
+      - run: npm run db:advisors
+      - run: npm audit --omit=dev --audit-level=high
