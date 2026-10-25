@@ -10,6 +10,7 @@
     "test": "vitest run",
     "db:start": "tsx scripts/start-local.ts",
     "db:test": "tsx scripts/database-tests.ts",
+    "db:migrations:check": "tsx scripts/check-migrations.ts",
     "local:setup": "tsx scripts/local-setup.ts",
     "desktop": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "desktop:build": "npm run build && tsx scripts/build-desktop.ts",

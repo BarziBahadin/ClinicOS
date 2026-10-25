@@ -267,6 +267,35 @@ try {
       "40001",
     );
   });
+  await test("Patient merges reject stale identity reviews before changing either profile", async () => {
+    const source = success(
+      await command("receptionist", "patient.create", {
+        full_name: "Merge review source",
+        birth_precision: "unknown",
+      }),
+    ).data.id;
+    const payload = {
+      patient_id: source,
+      target_id: patientId,
+      version: 0,
+      reason: "Synthetic identity review with two identifiers",
+    };
+    assert.equal(
+      (await command("owner", "patient.merge", payload)).error?.code,
+      "40001",
+    );
+    const unchanged = (
+      await db.query(
+        "select merged_into,version from clinic.patients where id=$1",
+        [source],
+      )
+    ).rows[0];
+    assert.equal(unchanged.merged_into, null);
+    assert.equal(unchanged.version, 1);
+    success(
+      await command("owner", "patient.merge", { ...payload, version: 1 }),
+    );
+  });
   await test("Double booking is prevented in concurrent appointment creation", async () => {
     const {
       data: { user },
@@ -285,6 +314,44 @@ try {
       ),
     );
     assert.equal(rs.filter((r) => !r.error).length, 1);
+  });
+  await test("Encounters cannot attach another patient's appointment or an unknown appointment", async () => {
+    const appointment = (
+      await db.query(
+        "select id from clinic.appointments where organization_id=$1 limit 1",
+        [org],
+      )
+    ).rows[0].id;
+    const differentPatient = success(
+      await command("receptionist", "patient.create", {
+        full_name: "Appointment identity test",
+        birth_precision: "unknown",
+      }),
+    ).data.id;
+    for (const appointment_id of [appointment, randomUUID()]) {
+      const result = await command("doctor", "encounter.save", {
+        patient_id: differentPatient,
+        appointment_id,
+        chief_complaint: "Appointment review",
+      });
+      assert.match(result.error?.message ?? "", /Appointment does not belong/);
+    }
+    assert.equal(
+      (
+        await db.query(
+          "select count(*) from clinic.encounters where patient_id=$1",
+          [differentPatient],
+        )
+      ).rows[0].count,
+      "0",
+    );
+    success(
+      await command("doctor", "encounter.save", {
+        patient_id: patientId,
+        appointment_id: appointment,
+        chief_complaint: "Matching appointment",
+      }),
+    );
   });
   let serviceId = "";
   await test("Owner configures services; receptionist cannot change prices", async () => {
@@ -762,6 +829,87 @@ try {
     );
     assert.notEqual(next.data.items[0].id, r.data.items[0].id);
   });
+  await test("Financial record pages enforce permissions, paginate, and retain invoice currency", async () => {
+    const pageInvoice = success(
+      await command("receptionist", "invoice.issue", {
+        patient_id: patientId,
+        currency: "USD",
+        lines: [{ service_id: serviceId, quantity: 1 }],
+      }),
+    ).data.id;
+    success(
+      await command("receptionist", "payment.record", {
+        patient_id: patientId,
+        invoice_id: pageInvoice,
+        currency: "USD",
+        amount: "25",
+        method: "cash",
+      }),
+    );
+    const anonymous = createClient(status.API_URL, status.PUBLISHABLE_KEY, {
+      auth: { persistSession: false },
+    });
+    assert.ok(
+      (await anonymous.rpc("record_page", { record_type: "invoices" })).error,
+    );
+    assert.ok(
+      (
+        await clients.receptionist.rpc("record_page", {
+          record_type: "expenses",
+        })
+      ).error,
+    );
+    assert.ok(
+      (await clients.doctor.rpc("record_page", { record_type: "invoices" }))
+        .error,
+    );
+    const first = success(
+      await clients.receptionist.rpc("record_page", {
+        record_type: "invoices",
+        page_size: 1,
+      }),
+    );
+    assert.equal(first.data.items.length, 1);
+    assert.equal(first.data.has_more, true);
+    const next = success(
+      await clients.receptionist.rpc("record_page", {
+        record_type: "invoices",
+        page_size: 1,
+        cursor_id: first.data.items[0].id,
+      }),
+    );
+    assert.equal(next.data.items.length, 1);
+    assert.notEqual(next.data.items[0].id, first.data.items[0].id);
+    const invoice = success(
+      await clients.receptionist.rpc("record_page", {
+        record_type: "invoices",
+        search_term: pageInvoice,
+      }),
+    );
+    assert.equal(invoice.data.items.length, 1);
+    assert.equal(Number(invoice.data.items[0].balance), 75);
+    const payment = (
+      await db.query(
+        "select p.id,i.currency,i.invoice_number from clinic.payments p join clinic.invoices i on i.id=p.invoice_id where p.organization_id=$1 and p.currency<>i.currency limit 1",
+        [org],
+      )
+    ).rows[0];
+    assert.ok(payment);
+    const page = success(
+      await clients.receptionist.rpc("record_page", {
+        record_type: "payments",
+        search_term: payment.id,
+      }),
+    );
+    assert.equal(page.data.items.length, 1);
+    assert.equal(page.data.items[0].invoice_currency, payment.currency);
+    assert.equal(page.data.items[0].invoice_number, payment.invoice_number);
+    assert.ok(
+      page.data.items.every(
+        (item: { organization_id: string }) => item.organization_id === org,
+      ),
+    );
+  });
   if (process.argv.includes("--media")) {
     await test("Private media requires consent, scans clean uploads and authorizes temporary access", async () => {
       const consent = success(
@@ -814,7 +962,9 @@ try {
           })
         ).error,
       );
-      if(process.argv.includes("--recovery"))await test("Encrypted database and private media restore independently; altered keys fail closed",()=>recoveryCheck(db,admin,org));
+      if (process.argv.includes("--recovery"))
+        await test("Encrypted database and private media restore independently; altered keys fail closed", () =>
+          recoveryCheck(db, admin, org));
       const rejectedId = randomUUID();
       const infected = new FormData();
       for (const [k, v] of Object.entries({

@@ -35,6 +35,7 @@ jobs:
           exit 1
       - run: npm run check
       - run: npm run functions:check
+      - run: npm run db:migrations:check
       - run: npm run db:test -- --media
       - run: npm run db:advisors
       - run: npm audit --omit=dev --audit-level=high

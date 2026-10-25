@@ -14,7 +14,6 @@ const ckb: Record<string, string> = {
   "If an account exists, a recovery link has been sent. Open it to set a new password.":
     "ئەگەر هەژمارەکە هەبێت، بەستەری گەڕاندنەوە نێردراوە. بیکەرەوە بۆ دانانی وشەی نهێنی نوێ.",
   "Current": "ئێستا",
-  "Search": "گەڕان",
   "IQD per USD": "دینار بۆ هەر دۆلارێک",
   "Allow cross-currency settlement": "ڕێگەدان بە پارەدان بە دراوێکی جیاواز",
   Receipt: "وەسڵی پارەدان",

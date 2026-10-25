@@ -49,4 +49,8 @@ Monitor service health, scanner definition freshness, rejected/pending uploads, 
 
 ## Current verification limits
 
+Local verification on 25 October 2026 passed `npm run check` (10 tests and the web build), `npm run functions:check`, `npm run db:migrations:check`, `npm run db:test -- --media --recovery` (32 integration checks, including an encrypted database/private-object recovery drill), and `npm run db:advisors` (no warnings). The migration check replays committed migrations into an isolated shadow database and fails if the local application schema differs. CI runs this check before the integration suite. The deployment-parity migration captures previously local-only financial pagination, invoice balance projections, stale merge protection and appointment identity validation.
+
+`npm run desktop:build` produced an unsigned macOS arm64 development app. A smoke check of the running development desktop patient directory covered English, Sorani RTL, mixed-script names, patient numbers and phone numbers. This was not a full workflow acceptance run; printing, Windows and signed updates were not verified in this pass.
+
 The application has been developed and tested against a real local Supabase stack and local antivirus service. Production infrastructure, mail deliverability, independently scheduled/off-site backups, signed desktop distribution, actual clinic devices and legal/clinical/accounting acceptance require the clinic's configuration and credentials. Those are release requirements; local tests do not establish production compliance or replace staff acceptance.

@@ -42,6 +42,7 @@ The scanner must be healthy before uploading files. Check it with `docker inspec
 ```sh
 npm run check
 npm run functions:check
+npm run db:migrations:check
 npm run db:test -- --media
 npm run db:advisors
 ```
