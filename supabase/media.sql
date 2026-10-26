@@ -9,7 +9,7 @@ begin
  if length(trim(title))=0 or length(trim(body_site))=0 or content_hash !~ '^[a-f0-9]{64}$' then raise exception 'Invalid media metadata'; end if;
  select * into existing from clinic.media where id=media_id;
  if found then
- if existing.patient_id<>patient_id or existing.title<>title or existing.body_site<>body_site or existing.object_key not like '%'||content_hash then raise exception 'Upload identifier already used for a different file'; end if;
+ if existing.patient_id<>patient_id or existing.consent_id<>consent_id or existing.mime_type<>mime_type or existing.title<>title or existing.body_site<>body_site or existing.object_key not like '%'||content_hash then raise exception 'Upload identifier already used for a different file'; end if;
  return jsonb_build_object('id',existing.id,'key',existing.object_key,'status',existing.status);
  end if;
  key:=clinic.org_id()::text||'/'||media_id::text||'/'||content_hash;

@@ -1,3 +1,6 @@
+import { Help } from "./features/help";
+import { PhoneReminders } from "./features/phone-reminders";
+import { hasRole } from "./domain/staff";
 import { AppointmentsPage } from "./features/appointments";
 import {
   lazy,
@@ -22,6 +25,7 @@ import {
   Image,
   Languages,
   LoaderCircle,
+  PanelLeft,
   LogOut,
   Package,
   Plus,
@@ -44,6 +48,7 @@ import {
   DataTable,
   Empty,
   ErrorMessage,
+  Loading,
   options,
   type Action,
   type T,
@@ -78,16 +83,31 @@ const Reports = lazy(() =>
 const Team = lazy(() =>
   import("./features/team").then((module) => ({ default: module.Team })),
 );
-import { MediaPanel } from "./features/media";
+import { MediaWorkspace as MediaPanel } from "./features/media";
+import { RecordPager, useRecordPage } from "./components/RecordPager";
+import { Accounting } from "./features/accounting";
+import { ClinicalSharing, Retention } from "./features/access";
+import { InventoryTools } from "./features/inventory";
+import {
+  Treatments,
+  PatientTools,
+  ScheduleTools,
+  StockActions,
+} from "./features/workflows";
 import { PatientDirectory } from "./features/patients";
 import { AccountPanel } from "./features/account";
-import { emailLink } from "./lib/email-link";
-import { EmailConfirmation, PasswordRecovery } from "./features/auth-links";
+import { usernameIdentity } from "../supabase/functions/_shared/username";
 import { MfaPanel } from "./features/security";
 
 const navigation = [
   { id: "overview", label: "Overview", icon: Home, permission: "" },
   { id: "patients", label: "Patients", icon: Users, permission: "patients" },
+  {
+    id: "treatments",
+    label: "Treatments",
+    icon: ClipboardList,
+    permission: "schedule",
+  },
   {
     id: "appointments",
     label: "Appointments",
@@ -115,6 +135,12 @@ const navigation = [
   },
   { id: "finance", label: "Finance", icon: Wallet, permission: "finance" },
   {
+    id: "accounting",
+    label: "Accounting",
+    icon: ClipboardList,
+    permission: "finance",
+  },
+  {
     id: "inventory",
     label: "Inventory",
     icon: Package,
@@ -128,8 +154,19 @@ const navigation = [
     permission: "staff",
   },
   { id: "settings", label: "Settings", icon: Settings, permission: "settings" },
+  {
+    id: "retention",
+    label: "Retention & holds",
+    icon: ShieldCheck,
+    permission: "staff",
+  },
+  { id: "help", label: "Help & user guide", icon: FileHeart, permission: "" },
 ];
 export function App() {
+  const [navigationOpen, setNavigationOpen] = useState(
+    () => window.innerWidth > 760,
+  );
+  const [patientView, setPatientView] = useState({ id: "", section: "" });
   const [locale, setLocale] = useState<Locale>(() =>
     localStorage.getItem("clinicos.locale") === "ckb" ? "ckb" : "en",
   );
@@ -145,6 +182,7 @@ export function App() {
   const [record, setRecord] = useState<{
       encounters: Row[];
       procedures: Row[];
+      facts?: Row[];
     } | null>(null),
     [recordError, setRecordError] = useState("");
   const generation = useRef(0);
@@ -152,8 +190,17 @@ export function App() {
     refreshGeneration = useRef(0);
   const authIdentity = useRef<string | undefined>(undefined);
   const t: T = useCallback((s) => translate(locale, s), [locale]);
+  useEffect(() => {
+    const compact = window.matchMedia("(max-width: 760px)");
+    const collapse = () => {
+      if (compact.matches) setNavigationOpen(false);
+    };
+    compact.addEventListener("change", collapse);
+    return () => compact.removeEventListener("change", collapse);
+  }, []);
   const navigate = (to: string) => {
     location.hash = to;
+    if (window.innerWidth <= 760) setNavigationOpen(false);
   };
   useEffect(() => {
     document.documentElement.lang = locale;
@@ -184,13 +231,8 @@ export function App() {
         setRecord(null);
         setRecordError("");
         setSearch("");
-        location.hash =
-          s &&
-          (emailLink ||
-            new URLSearchParams(location.search).get("onboarding") === "1" ||
-            new URLSearchParams(location.search).get("recovery") === "1")
-            ? "account"
-            : "overview";
+        setPatientView({ id: "", section: "" });
+        location.hash = "overview";
       }
       if (s && _e === "PASSWORD_RECOVERY") location.hash = "account";
       setSession(s);
@@ -279,6 +321,12 @@ export function App() {
   const selected = route.startsWith("patients/")
     ? data?.patients.find((p) => p.id === route.split("/")[1])
     : undefined;
+  const patientSection =
+    patientView.id === selected?.id
+      ? patientView.section
+      : data?.permissions.includes("clinical")
+        ? "records"
+        : "contacts";
   useEffect(() => {
     const id = route.match(/^patients\/([a-f0-9-]{36})$/)?.[1];
     if (!id || !data || selected) return;
@@ -356,6 +404,28 @@ export function App() {
     setTimeout(() => setNotice(""), 3500);
   };
   const toggleLocale = () => setLocale(locale === "en" ? "ckb" : "en");
+  const clinicalPage = useRecordPage(
+    "encounters",
+    route === "clinical" && data?.permissions.includes("clinical")
+      ? data
+      : null,
+  );
+  const resultsPage = useRecordPage(
+    "results",
+    route === "results" && data?.permissions.includes("results") ? data : null,
+  );
+  const tasksPage = useRecordPage(
+    "tasks",
+    route === "results" && data?.permissions.includes("results") ? data : null,
+  );
+  const stockPage = useRecordPage(
+    "stock_lots",
+    route === "inventory" &&
+      (data?.permissions.includes("inventory") ||
+        data?.permissions.includes("inventory.read"))
+      ? data
+      : null,
+  );
   if (!authReady)
     return (
       <div className="splash">
@@ -363,8 +433,8 @@ export function App() {
         {t("Workspace")}
       </div>
     );
-  if (!session && emailLink) return <EmailConfirmation t={t} />;
-  if (!session) return <Login t={t} toggleLocale={toggleLocale} />;
+  if (!session)
+    return <Login t={t} toggleLocale={toggleLocale} notice={notice} />;
   if (!data)
     return (
       <div className="splash">
@@ -391,7 +461,9 @@ export function App() {
       </div>
     );
   const can = (p: string) => data.permissions.includes(p);
-  const page = route.split("/")[0];
+  const page = data.account?.password_change_required
+    ? "account"
+    : route.split("/")[0];
   const patientLabels = new Map<string, string>();
   for (const collection of [
     data.appointments,
@@ -503,7 +575,7 @@ export function App() {
             className="text-button strong"
             onClick={() => navigate(`patients/${a.patient_id}`)}
           >
-            {patientName(a.patient_id)}
+            {String(a.patient_name ?? patientName(a.patient_id))}
           </button>
         </td>
         <td>{str(a, "service_name")}</td>
@@ -565,7 +637,56 @@ export function App() {
               {t("Cancel")}
             </button>
           )}
-          {can("schedule") && a.status==="scheduled" && <button className="text-button" onClick={()=>setAction({title:"No-show",kind:"appointment.status",fixed:{id:a.id,version:a.version,status:"no_show"},fields:[text("reason","Reason")]})}>{t("No-show")}</button>}
+          {can("schedule") &&
+            ["scheduled", "checked_in"].includes(String(a.status)) && (
+              <button
+                className="text-button"
+                onClick={() =>
+                  setAction({
+                    title: "Reschedule appointment",
+                    kind: "appointment.reschedule",
+                    fixed: { id: a.id, version: a.version },
+                    fields: [
+                      {
+                        name: "resource_id",
+                        label: "Room / device",
+                        value: a.resource_id,
+                      },
+                      {
+                        name: "starts_at",
+                        label: "Start",
+                        type: "datetime-local",
+                        required: true,
+                      },
+                      {
+                        name: "ends_at",
+                        label: "End",
+                        type: "datetime-local",
+                        required: true,
+                      },
+                      text("reason", "Reason"),
+                    ],
+                  })
+                }
+              >
+                {t("Reschedule")}
+              </button>
+            )}
+          {can("schedule") && a.status === "scheduled" && (
+            <button
+              className="text-button"
+              onClick={() =>
+                setAction({
+                  title: "No-show",
+                  kind: "appointment.status",
+                  fixed: { id: a.id, version: a.version, status: "no_show" },
+                  fields: [text("reason", "Reason")],
+                })
+              }
+            >
+              {t("No-show")}
+            </button>
+          )}
         </td>
       </tr>
     ));
@@ -619,7 +740,18 @@ export function App() {
     );
   }
   let content: ReactNode;
-  if (!data.permissions.length)
+  if (data.account?.password_change_required)
+    content = (
+      <AccountPanel
+        t={t}
+        onVerified={refresh}
+        required
+        onPasswordChanged={() =>
+          setNotice(t("Password updated. Sign in with your new password."))
+        }
+      />
+    );
+  else if (!data.permissions.length)
     content = <MfaPanel t={t} onVerified={refresh} />;
   else if (selected)
     content = (
@@ -628,18 +760,20 @@ export function App() {
           className="text-button back"
           onClick={() => navigate("patients")}
         >
-          ← {t("Back to patients")}
+          {locale === "ckb" ? "→" : "←"} {t("Back to patients")}
         </button>
         <div className="patient-profile">
           <div className="profile-identity">
             <div className="avatar large">{selected.full_name.slice(0, 1)}</div>
             <div>
-              <span className="eyebrow">{selected.patient_number}</span>
+              <bdi className="eyebrow" dir="ltr">
+                {selected.patient_number}
+              </bdi>
               <h2 dir="auto">{selected.full_name}</h2>
               <p>
                 {t("Age")}:{" "}
                 {ageAt(selected.birth_date, selected.birth_precision)} ·{" "}
-                <bdi>{selected.phone ?? t("No phone recorded")}</bdi>
+                <bdi dir="ltr">{selected.phone ?? t("No phone recorded")}</bdi>
               </p>
             </div>
           </div>
@@ -690,7 +824,7 @@ export function App() {
                 setAction({
                   title: "Merge patient profiles",
                   kind: "patient.merge",
-                  fixed: { patient_id: selected.id,version:selected.version },
+                  fixed: { patient_id: selected.id, version: selected.version },
                   fields: [
                     {
                       name: "target_id",
@@ -710,11 +844,42 @@ export function App() {
                 })
               }
             >
-              Merge profile
+              {t("Merge profile")}
             </button>
           )}
         </div>
-        {can("clinical") && (
+        <nav className="patient-sections" aria-label={t("Patient sections")}>
+          <div className="segmented">
+            {[
+              ...(can("clinical")
+                ? [
+                    { id: "records", label: "Clinical records" },
+                    { id: "history", label: "Clinical history" },
+                    { id: "documents", label: "Documents & consent" },
+                  ]
+                : []),
+              ...(can("media")
+                ? [{ id: "media", label: "Clinical media" }]
+                : []),
+              { id: "contacts", label: "Contacts" },
+              { id: "access", label: "Care team & access" },
+            ].map((section) => (
+              <button
+                key={section.id}
+                className={patientSection === section.id ? "selected" : ""}
+                aria-current={
+                  patientSection === section.id ? "page" : undefined
+                }
+                onClick={() =>
+                  setPatientView({ id: selected.id, section: section.id })
+                }
+              >
+                {t(section.label)}
+              </button>
+            ))}
+          </div>
+        </nav>
+        {can("clinical") && patientSection === "records" && (
           <section className="panel">
             <div className="panel-head">
               <h2>{t("Clinical records")}</h2>
@@ -723,9 +888,7 @@ export function App() {
             {recordError ? (
               <ErrorMessage error={recordError} />
             ) : !record ? (
-              <div className="empty">
-                <LoaderCircle className="spin" />
-              </div>
+              <Loading t={t} />
             ) : !record.encounters.length ? (
               <Empty t={t} />
             ) : (
@@ -786,7 +949,7 @@ export function App() {
                             setAction(encounterAction(data, selected.id, e))
                           }
                         >
-                          {t("Edit profile")}
+                          {t("Edit encounter")}
                         </button>
                         <button
                           className="button primary small"
@@ -835,14 +998,26 @@ export function App() {
             )}
           </section>
         )}
-        {can("media") && (
+        {can("media") && patientSection === "media" && (
           <MediaPanel
+            key={`media-${session.user.id}-${selected.id}`}
+            sessionKey={session.access_token}
             data={data}
             t={t}
             patientId={selected.id}
             onSaved={saved}
           />
         )}
+        <PatientTools
+          key={`tools-${session.user.id}-${selected.id}`}
+          data={data}
+          t={t}
+          locale={locale}
+          setAction={setAction}
+          patient={selected}
+          record={record}
+          section={patientSection}
+        />
       </>
     );
   else if (page === "overview")
@@ -851,48 +1026,73 @@ export function App() {
         <div className="welcome">
           <div>
             <span className="eyebrow">{t("Operational overview")}</span>
-            <h2>{t("Patient care, thoughtfully organized.")}</h2>
+            <h2>{data.organization.name}</h2>
             <p>{formatDate(new Date().toISOString(), false, locale)}</p>
-          </div>
-          <div className="welcome-art" aria-hidden="true">
-            <Stethoscope size={74} strokeWidth={1} />
-            <span className="art-dot one" />
-            <span className="art-dot two" />
           </div>
         </div>
         <div className="metrics">
           {[
             {
               label: "Today’s appointments",
+              visible: can("schedule"),
               value: data.metrics.today_appointments,
               icon: CalendarDays,
             },
             {
               label: "Waiting patients",
+              visible: can("schedule"),
               value: data.metrics.waiting,
               icon: Users,
             },
             {
               label: "Open invoices",
+              visible: can("billing") || can("finance"),
               value: data.metrics.open_invoices,
               icon: CircleDollarSign,
             },
             {
               label: "Follow-ups due",
+              visible: can("results"),
               value: data.metrics.followups_due,
               icon: ClipboardList,
             },
-          ].map((m) => (
-            <div className="metric" key={m.label}>
-              <div className="metric-top">
-                <span>{t(m.label)}</span>
-                <m.icon size={18} />
+          ]
+            .filter((m) => m.visible)
+            .map((m) => (
+              <div className="metric" key={m.label}>
+                <div className="metric-top">
+                  <span>{t(m.label)}</span>
+                  <m.icon size={18} />
+                </div>
+                <strong>{m.value}</strong>
+                <span className="metric-note">
+                  {t(m.label === "Today’s appointments" ? "Today" : "Current")}
+                </span>
               </div>
-              <strong>{m.value.toString().padStart(2, "0")}</strong>
-              <span className="metric-note">{t(m.label==="Today’s appointments"?"Today":"Current")}</span>
-            </div>
-          ))}
+            ))}
         </div>
+        <nav className="quick-links" aria-label={t("Quick access")}>
+          {navigation
+            .filter(
+              (n) =>
+                [
+                  "appointments",
+                  "patients",
+                  "clinical",
+                  "billing",
+                  "finance",
+                  "accounting",
+                  "inventory",
+                ].includes(n.id) && can(n.permission),
+            )
+            .slice(0, 4)
+            .map((n) => (
+              <a key={n.id} className="quick-link" href={`#${n.id}`}>
+                <n.icon size={20} />
+                {t(n.label)}
+              </a>
+            ))}
+        </nav>
         {can("schedule") && (
           <section className="panel">
             <div className="panel-head">
@@ -961,11 +1161,24 @@ export function App() {
     );
   else if (page === "appointments" && can("schedule"))
     content = (
-      <AppointmentsPage
-        t={t}
-        renderRows={appointmentRows}
-        refreshKey={data.appointments}
-      />
+      <>
+        <AppointmentsPage
+          t={t}
+          renderRows={appointmentRows}
+          refreshKey={data.appointments}
+        />
+        <PhoneReminders
+          data={data}
+          t={t}
+          locale={locale}
+          setAction={setAction}
+        />
+        <ScheduleTools data={data} t={t} setAction={setAction} />
+      </>
+    );
+  else if (page === "treatments" && can("schedule"))
+    content = (
+      <Treatments data={data} t={t} locale={locale} setAction={setAction} />
     );
   else if (page === "clinical" && can("clinical"))
     content = (
@@ -973,7 +1186,8 @@ export function App() {
         <div className="panel-head">
           <h2>{t("Clinical records")}</h2>
         </div>
-        {data.encounters.length ? (
+        <RecordPager page={clinicalPage} t={t} />
+        {clinicalPage.items.length ? (
           <DataTable
             heads={[
               "Patient",
@@ -984,9 +1198,9 @@ export function App() {
               "Action",
             ].map(t)}
           >
-            {data.encounters.map((e) => (
+            {clinicalPage.items.map((e) => (
               <tr key={e.id}>
-                <td>{patientName(e.patient_id)}</td>
+                <td>{str(e, "patient_name")}</td>
                 <td>{str(e, "chief_complaint")}</td>
                 <td>{doctorName(e.doctor_id)}</td>
                 <td>{formatDate(e.created_at, false, locale)}</td>
@@ -1010,7 +1224,14 @@ export function App() {
       </section>
     );
   else if (page === "media" && can("media"))
-    content = <MediaPanel data={data} t={t} onSaved={saved} />;
+    content = (
+      <MediaPanel
+        sessionKey={session.access_token}
+        data={data}
+        t={t}
+        onSaved={saved}
+      />
+    );
   else if (page === "results" && can("results"))
     content = (
       <>
@@ -1036,7 +1257,7 @@ export function App() {
                     required: true,
                     options: options(
                       data.members.filter(
-                        (m) => m.role === "doctor" && m.active,
+                        (m) => hasRole(m, "doctor") && m.active,
                       ),
                       "display_name",
                       "user_id",
@@ -1054,7 +1275,8 @@ export function App() {
           <div className="panel-head">
             <h2>{t("Results & follow-up")}</h2>
           </div>
-          {data.results.length ? (
+          <RecordPager page={resultsPage} t={t} />
+          {resultsPage.items.length ? (
             <DataTable
               heads={[
                 "Patient",
@@ -1065,9 +1287,9 @@ export function App() {
                 "Action",
               ].map(t)}
             >
-              {data.results.map((r) => (
+              {resultsPage.items.map((r) => (
                 <tr key={r.id}>
-                  <td>{patientName(r.patient_id)}</td>
+                  <td>{str(r, "patient_name")}</td>
                   <td>{str(r, "order_name")}</td>
                   <td className="mono">{str(r, "specimen_reference")}</td>
                   <td>{formatDate(r.due_at, false, locale)}</td>
@@ -1121,7 +1343,8 @@ export function App() {
           <div className="panel-head">
             <h2>{t("Follow-up")}</h2>
           </div>
-          {data.tasks.length ? (
+          <RecordPager page={tasksPage} t={t} />
+          {tasksPage.items.length ? (
             <DataTable
               heads={[
                 "Patient",
@@ -1131,9 +1354,9 @@ export function App() {
                 "Action",
               ].map(t)}
             >
-              {data.tasks.map((r) => (
+              {tasksPage.items.map((r) => (
                 <tr key={r.id}>
-                  <td>{patientName(r.patient_id)}</td>
+                  <td>{str(r, "patient_name")}</td>
                   <td>{str(r, "title")}</td>
                   <td>{formatDate(r.due_at, false, locale)}</td>
                   <td>{doctorName(r.assigned_to)}</td>
@@ -1177,6 +1400,16 @@ export function App() {
         can={can}
       />
     );
+  else if (page === "accounting" && can("finance"))
+    content = (
+      <Accounting
+        data={data}
+        t={t}
+        locale={locale}
+        setAction={setAction}
+        onSaved={saved}
+      />
+    );
   else if (page === "finance" && can("finance"))
     content = (
       <Finance
@@ -1189,72 +1422,90 @@ export function App() {
     );
   else if (page === "inventory" && (can("inventory") || can("inventory.read")))
     content = (
-      <section className="panel">
-        <div className="panel-head">
-          <h2>{t("Inventory")}</h2>
-        </div>
-        {data.stock.length ? (
-          <DataTable
-            heads={[
-              "Product",
-              "Lot number",
-              "Expiry date",
-              "Available",
-              "Unit",
-              "Action",
-            ].map(t)}
-          >
-            {data.stock.map((s) => (
-              <tr key={s.id}>
-                <td className="strong">{str(s, "product")}</td>
-                <td className="mono">{str(s, "lot_number")}</td>
-                <td
-                  className={
-                    String(s.expires_on) < day(new Date().toISOString())
-                      ? "danger"
-                      : ""
-                  }
-                >
-                  {formatDate(s.expires_on, false, locale)}
-                </td>
-                <td>{str(s, "quantity")}</td>
-                <td>{str(s, "unit")}</td>
-                <td>
-                  {can("clinical") && (
-                    <button
-                      className="button small secondary"
-                      onClick={() =>
-                        setAction({
-                          title: "Use stock",
-                          kind: "stock.use",
-                          fixed: { lot_id: s.id },
-                          fields: [
-                            encounter(data),
-                            number("amount", "Quantity"),
-                            text("reason", "Reason"),
-                          ],
-                        })
-                      }
-                    >
-                      {t("Use stock")}
-                    </button>
-                  )}
-                </td>
-              </tr>
-            ))}
-          </DataTable>
-        ) : (
-          <Empty t={t} />
-        )}
-      </section>
+      <>
+        <InventoryTools
+          data={data}
+          t={t}
+          locale={locale}
+          setAction={setAction}
+        />
+        <section className="panel">
+          <div className="panel-head">
+            <h2>{t("Inventory")}</h2>
+          </div>
+          <RecordPager page={stockPage} t={t} />
+          {stockPage.items.length ? (
+            <DataTable
+              heads={[
+                "Product",
+                "Lot number",
+                "Expiry date",
+                "Available",
+                "Unit",
+                "Action",
+              ].map(t)}
+            >
+              {stockPage.items.map((s) => (
+                <tr key={s.id}>
+                  <td className="strong">{str(s, "product")}</td>
+                  <td className="mono">{str(s, "lot_number")}</td>
+                  <td
+                    className={
+                      String(s.expires_on) < day(new Date().toISOString())
+                        ? "danger"
+                        : ""
+                    }
+                  >
+                    {formatDate(s.expires_on, false, locale)}
+                  </td>
+                  <td>{str(s, "quantity")}</td>
+                  <td>{str(s, "unit")}</td>
+                  <td>
+                    {can("inventory") && (
+                      <StockActions row={s} t={t} setAction={setAction} />
+                    )}
+                    {can("clinical") && (
+                      <button
+                        className="button small secondary"
+                        onClick={() =>
+                          setAction({
+                            title: "Use stock",
+                            kind: "stock.use",
+                            fixed: { lot_id: s.id },
+                            fields: [
+                              patient(data),
+                              encounter(data),
+                              number("amount", "Quantity"),
+                              text("reason", "Reason"),
+                            ],
+                          })
+                        }
+                      >
+                        {t("Use stock")}
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </DataTable>
+          ) : (
+            <Empty t={t} />
+          )}
+        </section>
+      </>
     );
   else if (page === "reports" && can("finance"))
     content = <Reports data={data} t={t} locale={locale} />;
   else if (page === "team" && can("staff"))
     content = <Team data={data} t={t} onSaved={saved} setAction={setAction} />;
+  else if (page === "retention" && can("staff"))
+    content = (
+      <Retention data={data} t={t} locale={locale} setAction={setAction} />
+    );
   else if (page === "settings" && can("settings"))
     content = (
       <>
+        <ClinicalSharing data={data} t={t} setAction={setAction} />
         <section className="panel">
           <div className="panel-head">
             <h2>{t("Settings")}</h2>
@@ -1341,21 +1592,53 @@ export function App() {
       </>
     );
   else if (page === "account")
-    content = <AccountPanel t={t} onVerified={refresh} />;
+    content = (
+      <AccountPanel
+        t={t}
+        onVerified={refresh}
+        onPasswordChanged={() =>
+          setNotice(t("Password updated. Sign in with your new password."))
+        }
+      />
+    );
+  else if (page === "help") content = <Help locale={locale} t={t} />;
   else content = <Empty t={t} text="Access unavailable" />;
   return (
-    <div className="app-shell">
-      <a className="skip-link" href="#main-content">
-        Skip to content
+    <div
+      className={`app-shell ${navigationOpen ? "navigation-open" : "navigation-closed"}`}
+    >
+      <a
+        className="skip-link"
+        href="#main-content"
+        onClick={(event) => {
+          event.preventDefault();
+          document.getElementById("main-content")?.focus();
+        }}
+      >
+        {t("Skip to content")}
       </a>
-      <aside className="sidebar">
+      <aside
+        className="sidebar"
+        id="workspace-navigation"
+        inert={!navigationOpen}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") {
+            setNavigationOpen(false);
+            document
+              .querySelector<HTMLButtonElement>(
+                'button[aria-controls="workspace-navigation"]',
+              )
+              ?.focus();
+          }
+        }}
+      >
         <a href="#overview" className="brand">
           <span className="brand-mark">
             <Stethoscope size={24} />
           </span>
           <span>
             Clinic<span className="brand-os">OS</span>
-            <small>DERMATOLOGY WORKSPACE</small>
+            <small>{t("Dermatology")}</small>
           </span>
         </a>
         <div className="clinic-switch">
@@ -1368,75 +1651,102 @@ export function App() {
           </div>
         </div>
         <nav aria-label={t("Workspace")}>
-          <span className="nav-label">{t("Care")}</span>
-          {navigation
-            .filter(
-              (n) =>
-                !n.permission ||
-                can(n.permission) ||
-                (n.id === "inventory" && can("inventory.read")),
-            )
-            .map((n, i) => (
-              <div key={n.id}>
-                {n.id === "billing" && (
-                  <span className="nav-label practice">{t("Practice")}</span>
-                )}
-                <a
-                  href={`#${n.id}`}
-                  className={`nav-item ${page === n.id ? "active" : ""}`}
-                  aria-current={page === n.id ? "page" : undefined}
-                >
-                  <n.icon size={19} strokeWidth={1.7} />
-                  <span>{t(n.label)}</span>
-                  {n.id === "appointments" && today.length > 0 && (
-                    <span className="nav-count">{today.length}</span>
-                  )}
-                </a>
-                {i === -1 && null}
-              </div>
-            ))}
+          {[
+            {
+              label: can("patients") || can("schedule") ? "Care" : "Workspace",
+              ids: [
+                "overview",
+                "patients",
+                "appointments",
+                "treatments",
+                "clinical",
+                "media",
+                "results",
+              ],
+            },
+            {
+              label: "Practice",
+              ids: ["billing", "finance", "accounting", "inventory", "reports"],
+            },
+            { label: "Administration", ids: ["team", "settings", "retention"] },
+            { label: "Help", ids: ["help"] },
+          ].map((group) => {
+            const items = navigation
+              .filter((n) => group.ids.includes(n.id))
+              .filter(
+                (n) =>
+                  !n.permission ||
+                  can(n.permission) ||
+                  (n.id === "inventory" && can("inventory.read")),
+              );
+            return (
+              items.length > 0 && (
+                <div className="nav-group" key={group.label}>
+                  <span className="nav-label">{t(group.label)}</span>
+                  {items.map((n) => (
+                    <a
+                      key={n.id}
+                      href={`#${n.id}`}
+                      className={`nav-item ${page === n.id ? "active" : ""}`}
+                      aria-label={t(n.label)}
+                      aria-current={page === n.id ? "page" : undefined}
+                      onClick={() => {
+                        if (window.innerWidth <= 760) setNavigationOpen(false);
+                      }}
+                    >
+                      <n.icon size={19} strokeWidth={1.7} />
+                      <span>{t(n.label)}</span>
+                      {n.id === "appointments" && today.length > 0 && (
+                        <span className="nav-count">{today.length}</span>
+                      )}
+                    </a>
+                  ))}
+                </div>
+              )
+            );
+          })}
         </nav>
-        <div className="sidebar-bottom">
-          <div className="security-note">
-            <ShieldCheck size={16} />
-            <span>{t("Patient care, thoughtfully organized.")}</span>
-          </div>
-          <div className="staff-card">
-            <span className="avatar small">
-              {data.membership.display_name.slice(0, 1)}
-            </span>
-            <div>
-              <button
-                className="text-button strong"
-                onClick={() => navigate("account")}
-              >
-                {data.membership.display_name}
-              </button>
-              <span>
-                {t(
-                  data.membership.role.charAt(0).toUpperCase() +
-                    data.membership.role.slice(1),
-                )}
-              </span>
-            </div>
-            <button
-              className="icon-button"
-              aria-label={t("Sign out")}
-              onClick={() => void client().auth.signOut()}
-            >
-              <LogOut size={17} />
-            </button>
-          </div>
-        </div>
       </aside>
-      <main id="main-content">
+      {navigationOpen && (
+        <button
+          className="navigation-scrim"
+          aria-label={t("Close navigation")}
+          onClick={() => setNavigationOpen(false)}
+        />
+      )}
+      <main id="main-content" tabIndex={-1}>
         <header className="topbar">
           <div className="breadcrumb">
-            {t("Workspace")}
-            <ChevronRight size={14} />
+            <button
+              className="icon-button"
+              aria-label={t("Toggle navigation")}
+              aria-expanded={navigationOpen}
+              aria-controls="workspace-navigation"
+              onClick={() => setNavigationOpen(!navigationOpen)}
+            >
+              <PanelLeft size={19} />
+            </button>
             <span>{t(heading)}</span>
           </div>
           <div className="topbar-actions">
+            <button
+              className="account-button"
+              onClick={() => navigate("account")}
+              aria-label={`${t("My account")}: ${data.membership.display_name}`}
+            >
+              <span className="avatar small" aria-hidden="true">
+                {data.membership.display_name.slice(0, 1)}
+              </span>
+              <span className="account-name">
+                {data.membership.display_name}
+                <small>
+                  {t(
+                    data.membership.role.charAt(0).toUpperCase() +
+                      data.membership.role.slice(1),
+                  )}
+                </small>
+              </span>
+            </button>
             <button className="locale-button" onClick={toggleLocale}>
               <Languages size={17} />
               {locale === "en" ? "کوردی" : "English"}
@@ -1449,19 +1759,20 @@ export function App() {
             >
               <RefreshCw size={17} className={loading ? "spin" : ""} />
             </button>
-            <span
-              className={`connection-dot ${error ? "offline" : ""}`}
-              title={error ? "Connection unavailable" : "Connected"}
-            />
+            <button
+              className="icon-button"
+              aria-label={t("Sign out")}
+              title={t("Sign out")}
+              onClick={() => void client().auth.signOut()}
+            >
+              <LogOut size={17} />
+            </button>
           </div>
         </header>
         <div className="main-inner">
           <div className="page-heading">
             <div>
-              <span className="eyebrow">
-                {t(page === "overview" ? "Today" : "Workspace")}
-              </span>
-              <h1>{t(heading)}</h1>
+              <h1>{selected ? t("Patient profile") : t(heading)}</h1>
             </div>
             {primaryAction && data.permissions.length > 0 && (
               <button className="button primary" onClick={primaryAction}>
@@ -1472,15 +1783,7 @@ export function App() {
           </div>
           {error && <ErrorMessage error={error} />}
           <div className="page-content">
-            <Suspense
-              fallback={
-                <div className="empty">
-                  <LoaderCircle className="spin" />
-                </div>
-              }
-            >
-              {content}
-            </Suspense>
+            <Suspense fallback={<Loading t={t} />}>{content}</Suspense>
           </div>
           <footer className="workspace-footer">
             <span>ClinicOS · {t("Care")}</span>
@@ -1510,8 +1813,16 @@ export function App() {
   );
 }
 
-function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
-  const [recovering, setRecovering] = useState(false);
+function Login({
+  t,
+  toggleLocale,
+  notice,
+}: {
+  t: T;
+  toggleLocale: () => void;
+  notice?: string;
+}) {
+  const [passwordVisible, setPasswordVisible] = useState(false);
   const [busy, setBusy] = useState(false),
     [error, setError] = useState("");
   return (
@@ -1524,7 +1835,7 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
           ClinicOS
         </a>
         <div>
-          <span className="eyebrow">DERMATOLOGY, CONNECTED</span>
+          <span className="eyebrow">{t("Dermatology")}</span>
           <h1>{t("Your clinic, in focus.")}</h1>
           <p>{t("A considered workspace for exceptional patient care.")}</p>
           <div className="login-art" aria-hidden="true">
@@ -1535,7 +1846,7 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
           </div>
         </div>
         <span className="login-foot">
-          Medical & cosmetic dermatology · IQD / USD
+          {t("Medical & cosmetic dermatology")} · IQD / USD
         </span>
       </div>
       <div className="login-form">
@@ -1547,6 +1858,7 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
           <span className="eyebrow">CLINICOS WORKSPACE</span>
           <h2>{t("Sign in")}</h2>
           <p className="muted">{t("Use your individual clinic account.")}</p>
+          {notice && <p role="status">{notice}</p>}
           {!configured ? (
             <ErrorMessage error="Supabase connection is not configured. Run npm run local:setup or configure .env.local." />
           ) : (
@@ -1558,7 +1870,7 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
                 setError("");
                 try {
                   const { error } = await client().auth.signInWithPassword({
-                    email: String(f.get("email")),
+                    email: usernameIdentity(String(f.get("username"))),
                     password: String(f.get("password")),
                   });
                   if (error) throw error;
@@ -1570,25 +1882,39 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
               }}
             >
               <label className="field">
-                <span>{t("Email")}</span>
+                <span>{t("Username")}</span>
                 <input
-                  name="email"
-                  type="email"
+                  name="username"
+                  type="text"
+                  maxLength={32}
+                  autoCapitalize="none"
+                  spellCheck={false}
                   autoComplete="username"
                   required
                   dir="ltr"
                 />
               </label>
-              <label className="field">
-                <span>{t("Password")}</span>
-                <input
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  minLength={10}
-                />
-              </label>
+              <div className="field">
+                <label htmlFor="login-password">{t("Password")}</label>
+                <div className="password-input">
+                  <input
+                    name="password"
+                    id="login-password"
+                    type={passwordVisible ? "text" : "password"}
+                    autoComplete="current-password"
+                    required
+                    minLength={10}
+                    dir="ltr"
+                  />
+                  <button
+                    type="button"
+                    aria-pressed={passwordVisible}
+                    onClick={() => setPasswordVisible(!passwordVisible)}
+                  >
+                    {t(passwordVisible ? "Hide" : "Show")}
+                  </button>
+                </div>
+              </div>
               {error && <ErrorMessage error={error} />}
               <button className="button primary full" disabled={busy}>
                 {busy && <LoaderCircle size={16} className="spin" />}
@@ -1597,17 +1923,10 @@ function Login({ t, toggleLocale }: { t: T; toggleLocale: () => void }) {
               </button>
             </form>
           )}
-          {configured && (
-            <button className="text-button" onClick={() => setRecovering(true)}>
-              {t("Forgot password?")}
-            </button>
-          )}
-          {recovering && (
-            <PasswordRecovery t={t} onClose={() => setRecovering(false)} />
-          )}
-          <p className="login-privacy">
-            <ShieldCheck size={15} />
-            {t("Use your individual clinic account.")}
+          <p className="muted">
+            {t(
+              "Forgot your password? Ask your clinic administrator to reset it.",
+            )}
           </p>
         </div>
       </div>

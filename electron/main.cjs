@@ -5,19 +5,35 @@ const {
   session,
   shell,
   dialog,
+  protocol,
+  net,
 } = require("electron");
 const { readFileSync } = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { bundlePath } = require("./bundle-path.cjs");
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "clinicos",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+    },
+  },
+]);
 const development = !app.isPackaged;
 const entry = development
   ? "http://127.0.0.1:5173"
-  : pathToFileURL(path.join(__dirname, "../dist/index.html")).href;
-const apiOrigin = development
-  ? "http://127.0.0.1:54321"
+  : "clinicos://app/index.html";
+const runtime = development
+  ? { apiOrigin: "http://127.0.0.1:54321", updateUrl: null }
   : JSON.parse(
       readFileSync(path.join(__dirname, "../dist/runtime.json"), "utf8"),
-    ).apiOrigin;
+    );
+const apiOrigin = runtime.apiOrigin;
+const applicationIcon = path.join(__dirname, "assets/icon.png");
 app.enableSandbox();
 function createWindow() {
   const win = new BrowserWindow({
@@ -26,7 +42,8 @@ function createWindow() {
     minWidth: 900,
     minHeight: 600,
     title: "ClinicOS",
-    backgroundColor: "#f5f6f8",
+    icon: applicationIcon,
+    backgroundColor: "#f3f7fb",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
@@ -47,9 +64,17 @@ function createWindow() {
     return { action: "deny" };
   });
   win.webContents.on("will-navigate", (event, url) => {
+    const target = new URL(url);
     if (
-      new URL(url).origin !== new URL(entry).origin ||
-      (!development && !url.startsWith(entry.split("#")[0]))
+      development
+        ? target.origin !== new URL(entry).origin
+        : !(
+            target.protocol === "clinicos:" &&
+            target.host === "app" &&
+            target.pathname === "/index.html" &&
+            !target.username &&
+            !target.password
+          )
     )
       event.preventDefault();
   });
@@ -78,6 +103,17 @@ function createWindow() {
   );
 }
 app.whenReady().then(() => {
+  app.dock?.setIcon(applicationIcon);
+  if (!development)
+    protocol.handle("clinicos", (request) => {
+      const file = bundlePath(
+        path.join(__dirname, "../dist"),
+        request.url,
+        request.method,
+      );
+      if (!file) return new Response("Unavailable", { status: 404 });
+      return net.fetch(pathToFileURL(file).href);
+    });
   session.defaultSession.webRequest.onHeadersReceived((details, callback) =>
     callback({
       responseHeaders: {
@@ -91,12 +127,14 @@ app.whenReady().then(() => {
     }),
   );
   createWindow();
-  if (app.isPackaged && process.env.CLINICOS_UPDATE_URL) {
-    const updateUrl = new URL(process.env.CLINICOS_UPDATE_URL);
+  if (app.isPackaged && runtime.updateUrl) {
+    const updateUrl = new URL(runtime.updateUrl);
     if (updateUrl.protocol !== "https:")
       throw new Error("Update feed must use HTTPS");
     const { autoUpdater } = require("electron-updater");
     autoUpdater.setFeedURL({ provider: "generic", url: updateUrl.href });
+    autoUpdater.allowDowngrade = false;
+    autoUpdater.disableWebInstaller = true;
     autoUpdater.autoInstallOnAppQuit = true;
     const reportUpdateFailure = () => {
       dialog.showErrorBox(

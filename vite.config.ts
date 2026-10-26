@@ -44,7 +44,10 @@ export default defineConfig(({ mode }) => {
           this.emitFile({
             type: "asset",
             fileName: "runtime.json",
-            source: JSON.stringify({ apiOrigin: origin }),
+            source: JSON.stringify({
+              apiOrigin: origin,
+              updateUrl: process.env.CLINICOS_UPDATE_URL ?? null,
+            }),
           });
           this.emitFile({
             type: "asset",

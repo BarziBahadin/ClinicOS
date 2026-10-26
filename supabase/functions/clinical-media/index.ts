@@ -1,3 +1,4 @@
+import { imagePreview, processingNote, UnsafeImageError } from '../_shared/preview.ts';
 import { authenticated,headers,json } from '../_shared/auth.ts';
 import { imageSize } from 'npm:image-size@2.0.2';
 class InfectedFileError extends Error {}
@@ -22,9 +23,10 @@ Deno.serve(async(req:Request)=>{
  try{
  const {userClient,admin}=await authenticated(req,'media');
  if(req.headers.get('content-type')?.includes('application/json')){
-  const body=await req.json();if(body.action!=='read')throw new Error('Invalid media action');
-  const {data:key,error}=await userClient.rpc('media_access',{media_id:body.media_id});if(error)throw new Error(error.message);
-  const {data,error:signError}=await admin.storage.from('clinical').createSignedUrl(key,60);if(signError)throw new Error(signError.message);const publicUrl=Deno.env.get('PUBLIC_SUPABASE_URL');const signedUrl=publicUrl?data.signedUrl.replace(new URL(data.signedUrl).origin,publicUrl):data.signedUrl;return json(req,{url:signedUrl});
+  const body=await req.json();if(!['read','preview','regenerate_preview'].includes(body.action))throw new Error('Invalid media action');
+  const {data:key,error}=await userClient.rpc(body.action==='preview'?'media_access_variant':'media_access',body.action==='preview'?{media_id:body.media_id,original:false}:{media_id:body.media_id});if(error)throw new Error(error.message);
+  if(body.action==='regenerate_preview'){const downloaded=await admin.storage.from('clinical').download(key);if(downloaded.error)throw new Error('Original image unavailable');const original=new Uint8Array(await downloaded.data.arrayBuffer());await scan(original);const preview=await imagePreview(original);await scan(preview);const previewHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',preview))).map(x=>x.toString(16).padStart(2,'0')).join('');const previewKey=key+'.preview-'+previewHash+'.png';const uploaded=await admin.storage.from('clinical').upload(previewKey,preview,{contentType:'image/png',upsert:false});if(uploaded.error&&!uploaded.error.message.toLowerCase().includes('already exists'))throw new Error('Preview could not be stored');const attached=await admin.rpc('media_preview_attach',{media_id:body.media_id,preview_path:previewKey,preview_hash:previewHash,note:processingNote});if(attached.error)throw new Error(attached.error.message);return json(req,{id:body.media_id});}
+  const {data,error:signError}=await admin.storage.from('clinical').createSignedUrl(key,60);if(signError)throw new Error(signError.message);const publicUrl=Deno.env.get('PUBLIC_SUPABASE_URL');const signedUrl=publicUrl?data.signedUrl.replace(new URL(data.signedUrl).origin,publicUrl):data.signedUrl;return json(req,{url:signedUrl,...(body.action==='preview'&&key.includes('.preview-')?{mime_type:'image/png'}:{})});
  }
  const length=Number(req.headers.get('content-length')??0);if(length>11000000)return json(req,{error:'Maximum file size is 10 MB'},413);
  if(!req.body)throw new Error('Choose a file');
@@ -44,8 +46,11 @@ Deno.serve(async(req:Request)=>{
  if(prepared.status==='ready')return json(req,{id:prepared.id});
  if(prepared.status==='rejected')throw new Error('This upload was rejected; choose a new file');
  try{await scan(bytes);}catch(e){if(e instanceof InfectedFileError){const {error:rejectError}=await admin.rpc('media_finalize',{media_id:prepared.id,approved:false});if(rejectError)throw new Error('Rejected file could not be recorded; contact the administrator');}throw e;}
+ let preview:Uint8Array<ArrayBuffer>|undefined;let previewHash:string|null=null;let previewKey:string|null=null;
+ if(mime.startsWith('image/')){try{preview=await imagePreview(bytes);await scan(preview);}catch(e){if(e instanceof UnsafeImageError){const rejected=await admin.rpc('media_finalize',{media_id:prepared.id,approved:false});if(rejected.error)throw new Error('Invalid image status could not be recorded');}throw e;}previewHash=Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',preview))).map(x=>x.toString(16).padStart(2,'0')).join('');previewKey=prepared.key+'.preview-'+previewHash+'.png';}
  const {error:uploadError}=await admin.storage.from('clinical').upload(prepared.key,bytes,{contentType:mime,upsert:false});if(uploadError&&!uploadError.message.toLowerCase().includes('already exists'))throw new Error(uploadError.message);
- const {error:finalizeError}=await admin.rpc('media_finalize',{media_id:prepared.id,approved:true});if(finalizeError)throw new Error(finalizeError.message);
+ if(preview&&previewKey){const uploaded=await admin.storage.from('clinical').upload(previewKey,preview,{contentType:'image/png',upsert:false});if(uploaded.error&&!uploaded.error.message.toLowerCase().includes('already exists'))throw new Error('Preview could not be stored. Retry the upload.');}
+ const {error:finalizeError}=await admin.rpc('media_complete',{media_id:prepared.id,preview_path:previewKey,preview_hash:previewHash,note:preview?processingNote:'Original scanned PDF'});if(finalizeError)throw new Error(finalizeError.message);
  return json(req,{id:prepared.id});
  }catch(e){return json(req,{error:e instanceof Error?e.message:'File operation failed'},400);}
 });

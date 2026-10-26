@@ -12,6 +12,8 @@
     "db:test": "tsx scripts/database-tests.ts",
     "db:migrations:check": "tsx scripts/check-migrations.ts",
     "local:setup": "tsx scripts/local-setup.ts",
+    "demo:seed": "tsx scripts/demo-data.ts",
+    "demo:photos": "tsx scripts/demo-photos.ts",
     "desktop": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
     "desktop:build": "npm run build && tsx scripts/build-desktop.ts",
     "format": "prettier --write src scripts tests electron vite.config.ts tsconfig.json",
@@ -20,7 +22,11 @@
     "functions:serve": "supabase functions serve --network-id clinicos-local --env-file .local/functions.env",
     "functions:check": "deno check --config supabase/functions/deno.json supabase/functions/staff-admin/index.ts supabase/functions/clinical-media/index.ts",
     "backup:local": "tsx scripts/backup-local.ts",
-    "db:advisors": "supabase db advisors --local --level warn --fail-on warn"
+    "db:advisors": "supabase db advisors --local --level warn --fail-on warn",
+    "ops:local": "tsx scripts/operations-local.ts",
+    "desktop:release": "tsx scripts/release-desktop.ts",
+    "desktop:release:preflight": "tsx scripts/release-desktop.ts --preflight",
+    "functions:test": "deno test --allow-env --config supabase/functions/deno.json supabase/functions/_shared/origin.test.ts"
   },
   "keywords": [],
   "author": "",
@@ -77,10 +83,12 @@
       "output": "release"
     },
     "mac": {
+      "icon": "electron/assets/icon.icns",
       "category": "public.app-category.medical",
       "hardenedRuntime": true
     },
     "win": {
+      "icon": "electron/assets/icon.ico",
       "target": "nsis"
     }
   }

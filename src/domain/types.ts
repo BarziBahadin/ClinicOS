@@ -15,12 +15,15 @@ export interface Patient extends Row {
   merged_into: string | null;
 }
 export interface Membership extends Row {
+  additional_roles?: Role[];
+  username?: string | null;
   user_id: string;
   display_name: string;
   role: Role;
   active: boolean;
 }
 export interface Snapshot {
+  account?: { username: string | null; password_change_required: boolean };
   metrics: {
     today_appointments: number;
     waiting: number;
@@ -57,6 +60,47 @@ export interface Snapshot {
   packages: Row[];
 }
 export type CommandName =
+  | "supplier.create"
+  | "supplier.update"
+  | "product.create"
+  | "availability.end"
+  | "document.create"
+  | "access.role.grant"
+  | "access.role.revoke"
+  | "access.limit.set"
+  | "care.assign"
+  | "care.revoke"
+  | "care.scope.set"
+  | "retention.rule.create"
+  | "retention.rule.approve"
+  | "retention.hold"
+  | "retention.release"
+  | "finance.mapping.create"
+  | "finance.mapping.approve"
+  | "finance.batch.create"
+  | "finance.batch.acknowledge"
+  | "finance.period.close"
+  | "finance.journal.adjust"
+  | "finance.bank.import"
+  | "finance.bank.match"
+  | "finance.bank.reverse_match"
+  | "service.propose"
+  | "service.approve"
+  | "template.create"
+  | "template.approve"
+  | "fact.record"
+  | "prescription.add"
+  | "contact.add"
+  | "contact.end"
+  | "contact.log"
+  | "performed.record"
+  | "performed.invoice"
+  | "package.expiry"
+  | "package.cancel"
+  | "stock.adjust"
+  | "availability.add"
+  | "resource.add"
+  | "appointment.reschedule"
   | "patient.create"
   | "patient.update"
   | "patient.merge"

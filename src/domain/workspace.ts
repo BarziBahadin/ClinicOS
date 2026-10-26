@@ -1,6 +1,18 @@
 import { z } from "zod";
 const RowSchema = z.object({ id: z.uuid() }).passthrough();
 const MemberSchema = RowSchema.extend({
+  additional_roles: z
+    .array(
+      z.enum([
+        "owner",
+        "administrator",
+        "doctor",
+        "receptionist",
+        "accountant",
+      ]),
+    )
+    .optional(),
+  username: z.string().nullable().optional(),
   user_id: z.uuid(),
   display_name: z.string(),
   role: z.enum([
@@ -13,6 +25,12 @@ const MemberSchema = RowSchema.extend({
   active: z.boolean(),
 });
 export const WorkspaceSchema = z.object({
+  account: z
+    .object({
+      username: z.string().nullable(),
+      password_change_required: z.boolean(),
+    })
+    .optional(),
   metrics: z.object({
     today_appointments: z.number(),
     waiting: z.number(),

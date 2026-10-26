@@ -1,9 +1,15 @@
-import { client } from "./supabase";
+import { captureAuthorization, client } from "./supabase";
 export async function invoke<T>(
   name: string,
   body: Record<string, unknown> | FormData,
 ): Promise<T> {
-  const { data, error } = await client().functions.invoke(name, { body });
+  const authorization = await captureAuthorization();
+  authorization.assertCurrent();
+  const { data, error } = await client().functions.invoke(name, {
+    body,
+    headers: { Authorization: `Bearer ${authorization.token}` },
+  });
+  authorization.assertCurrent();
   if (error) {
     let message = error.message;
     try {

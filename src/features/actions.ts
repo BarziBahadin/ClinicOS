@@ -1,3 +1,4 @@
+import { hasRole } from "../domain/staff";
 import type { Action, Field } from "../components/ui";
 import { options } from "../components/ui";
 import type { Patient, Row, Snapshot } from "../domain/types";
@@ -66,7 +67,15 @@ export const patient = (d: Snapshot, value?: string): Field => ({
     })),
   value,
 });
-export const encounter = (d: Snapshot, p?: string): Field => ({
+export const encounter = (
+  d: Snapshot,
+  p?: string,
+  encounterStatus?: "draft" | "signed",
+  ownOnly = false,
+): Field => ({
+  patientId: p,
+  encounterStatus,
+  ownOnly,
   name: "encounter_id",
   label: "Clinical records",
   required: true,
@@ -151,12 +160,13 @@ export function appointmentAction(d: Snapshot, p?: string): Action {
         label: "Clinician",
         required: true,
         options: options(
-          d.members.filter((m) => m.active && m.role === "doctor"),
+          d.members.filter((m) => m.active && hasRole(m, "doctor")),
           "display_name",
           "user_id",
         ),
       },
       text("service_name", "Service"),
+      { name: "resource_id", label: "Room / device", required: false },
       {
         name: "starts_at",
         label: "Start",

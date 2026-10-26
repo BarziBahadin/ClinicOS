@@ -12,4 +12,4 @@ This is a medical and cosmetic dermatology application for Iraq, in Sorani Kurdi
 - Never put privileged credentials or patient data in frontend bundles, telemetry, source control or development fixtures. Development seed scripts must refuse hosted targets.
 - Use `npm run check`, `npm run functions:check`, `npm run db:test -- --media`, and `npm run db:advisors`. Add regression coverage for data-integrity and authorization fixes. Do not weaken a test or authorization check to make a failure disappear.
 - Verify English and Sorani UI, mixed-direction identifiers, printing, interrupted submissions and at least the supported desktop release before production rollout.
-- Production activation requires configured hosting, SMTP, scanning, independent database/object recovery, protected signing/update credentials and clinic acceptance. Report verification limits accurately.
+- Production activation requires configured hosting, administrator-provisioned username accounts, scanning and private media processing, independent database/object recovery, protected signing/update credentials and clinic acceptance. Report verification limits accurately.

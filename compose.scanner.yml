@@ -1,4 +1,16 @@
 services:
+  media-processor:
+    build: ./services/media-processor
+    container_name: clinicos-media-processor
+    restart: unless-stopped
+    env_file: .local/media-processor.env
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 64
+    mem_limit: 512m
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    networks: [local]
   scanner:
     image: clamav/clamav:1.5.4-debian@sha256:d7ede3cefeaf3b8a72ebcdee849d13f504bbca3f3b3cfade5bc7b6ee06a4f62c
     container_name: clinicos-scanner

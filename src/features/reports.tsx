@@ -1,9 +1,10 @@
-import { RecordPager,useRecordPage } from "../components/RecordPager";
+import { RecordPager, useRecordPage } from "../components/RecordPager";
 import { useState } from "react";
 import type { Snapshot, Currency, Locale } from "../domain/types";
 import { DataTable, Empty, type T } from "../components/ui";
 import { money, sum, difference } from "../domain/money";
 import { formatDate, str } from "../lib/format";
+import { FinancialReports } from "./financial-reports";
 export function Reports({
   data,
   t,
@@ -13,11 +14,19 @@ export function Reports({
   t: T;
   locale: Locale;
 }) {
-  const audit=useRecordPage("audit",data);
-  const [tab, setTab] = useState<"balances" | "audit">("balances");
+  const audit = useRecordPage("audit", data);
+  const [tab, setTab] = useState<"balances" | "audit" | "operations">(
+    "operations",
+  );
   return (
     <>
       <div className="segmented">
+        <button
+          className={tab === "operations" ? "selected" : ""}
+          onClick={() => setTab("operations")}
+        >
+          {t("Operational reports")}
+        </button>
         <button
           className={tab === "balances" ? "selected" : ""}
           onClick={() => setTab("balances")}
@@ -31,8 +40,11 @@ export function Reports({
           {t("Audit trail")}
         </button>
       </div>
-      {tab === "audit" ? (
-        <section className="panel"><RecordPager page={audit} t={t}/>
+      {tab === "operations" ? (
+        <FinancialReports data={data} t={t} locale={locale} />
+      ) : tab === "audit" ? (
+        <section className="panel">
+          <RecordPager page={audit} t={t} />
           <DataTable heads={["Date", "Actor", "Action", "Record"].map(t)}>
             {audit.items.map((a) => (
               <tr key={a.id}>
@@ -72,7 +84,7 @@ export function Reports({
                           <td className="strong">{a}</td>
                           <td>{money(d, c, locale)}</td>
                           <td>{money(cr, c, locale)}</td>
-                          <td>{money(difference(d,cr), c, locale)}</td>
+                          <td>{money(difference(d, cr), c, locale)}</td>
                         </tr>
                       );
                     })}

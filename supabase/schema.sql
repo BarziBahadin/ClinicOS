@@ -26,8 +26,8 @@ $$;
 create function clinic.permissions(p_role text) returns text[] language sql immutable set search_path='' as $$
  select case p_role
  when 'owner' then array['patients','schedule','billing','finance','approve','inventory','staff','settings','audit','export','payroll']
- when 'administrator' then array['patients','schedule','billing','finance','inventory','audit']
- when 'doctor' then array['patients','schedule','clinical','media','results','inventory.read']
+ when 'administrator' then array['patients','schedule','billing','finance','inventory','audit','staff']
+ when 'doctor' then array['patients','schedule','clinical','media','results','inventory.read','clinical.export']
  when 'receptionist' then array['patients','schedule','billing']
  when 'accountant' then array['finance','approve','export','audit','payroll'] else array[]::text[] end
 $$;
@@ -261,7 +261,7 @@ declare o uuid:=clinic.org_id(); m clinic.memberships; r jsonb;
 begin
  if o is null then raise exception 'No active clinic membership. Ask the owner to invite your account.' using errcode='42501'; end if;
  select * into m from clinic.memberships where organization_id=o and user_id=auth.uid();
- r:=jsonb_build_object('organization',(select to_jsonb(x) from clinic.organizations x where id=o),'membership',to_jsonb(m),'permissions',case when exists(select 1 from clinic.organizations where id=o and (not require_mfa or auth.jwt()->>'aal'='aal2')) then to_jsonb(clinic.permissions(m.role)) else '[]'::jsonb end);
+ r:=jsonb_build_object('organization',(select to_jsonb(x) from clinic.organizations x where id=o),'membership',to_jsonb(m),'account',public.account_status(),'permissions',to_jsonb(array(select perm from unnest(clinic.user_permissions()) perm where clinic.allowed(perm))));
  r:=r || jsonb_build_object(
  'patients',coalesce((select jsonb_agg(x) from (select * from clinic.patients where organization_id=o order by created_at desc limit 300) x),'[]'),
  'appointments',coalesce((select jsonb_agg(x) from (select a.*,clinic.patient_label(a.patient_id) patient_name from clinic.appointments a where organization_id=o and starts_at>=(now() at time zone 'Asia/Baghdad')::date::timestamp at time zone 'Asia/Baghdad' order by starts_at limit 500) x),'[]'),
@@ -278,7 +278,7 @@ begin
  'movements',coalesce((select jsonb_agg(x) from (select * from clinic.cash_movements where organization_id=o order by created_at desc limit 300) x),'[]'),
  'journals',case when clinic.allowed('finance') then coalesce((select jsonb_agg(x) from (select j.*, (select jsonb_agg(l) from clinic.journal_lines l where l.journal_id=j.id) lines from clinic.journals j where organization_id=o order by created_at desc limit 500) x),'[]') else '[]'::jsonb end,
  'tills',coalesce((select jsonb_agg(x) from (select * from clinic.tills where organization_id=o order by opened_at desc limit 100) x),'[]'),
- 'members',coalesce((select jsonb_agg(x) from clinic.memberships x where organization_id=o),'[]'),
+ 'members',coalesce((select jsonb_agg(to_jsonb(x)||jsonb_build_object('additional_roles',clinic.extra_roles(x.user_id))) from clinic.memberships x where organization_id=o),'[]'),
  'audit',coalesce((select jsonb_agg(x) from (select * from clinic.audit_events where organization_id=o order by created_at desc limit 200) x),'[]'),
  'packages',coalesce((select jsonb_agg(x) from clinic.packages x where organization_id=o),'[]'),
  'billable_encounters',clinic.billable_encounters(),
@@ -292,9 +292,10 @@ grant execute on function public.workspace() to authenticated;
 create function public.clinical_record(patient_id uuid) returns jsonb language plpgsql security invoker set search_path='' as $$
 begin
  perform clinic.require_permission('clinical');
+ if not clinic.patient_care_access(patient_id) then raise exception 'Patient is outside your assigned care scope' using errcode='42501';end if;
  if not exists(select 1 from clinic.patients p where p.id=patient_id and organization_id=clinic.org_id()) then raise exception 'Patient not found'; end if;
  perform clinic.log_access('READ',patient_id,'clinical_record');
- return jsonb_build_object('encounters',coalesce((select jsonb_agg(x) from (select e.*, (select jsonb_agg(a) from clinic.addenda a where a.encounter_id=e.id) addenda from clinic.encounters e where e.patient_id in (select id from clinic.patient_ids(clinical_record.patient_id)) order by created_at desc) x),'[]'),'procedures',coalesce((select jsonb_agg(p) from clinic.procedures p where p.patient_id in (select id from clinic.patient_ids(clinical_record.patient_id))),'[]'));
+ return jsonb_build_object('encounters',coalesce((select jsonb_agg(x) from (select e.*, (select jsonb_agg(m order by m.created_at,m.id) from clinic.prescription_items m where m.encounter_id=e.id) prescription_items, (select jsonb_agg(a) from clinic.addenda a where a.encounter_id=e.id) addenda from clinic.encounters e where e.patient_id in (select id from clinic.patient_ids(clinical_record.patient_id)) order by created_at desc) x),'[]'),'facts',coalesce((select jsonb_agg(f order by f.created_at desc,f.id) from clinic.clinical_facts f where f.patient_id in (select id from clinic.patient_ids(clinical_record.patient_id)) and not exists(select 1 from clinic.clinical_facts n where n.supersedes_id=f.id)),'[]'),'procedures',coalesce((select jsonb_agg(p) from clinic.procedures p where p.patient_id in (select id from clinic.patient_ids(clinical_record.patient_id))),'[]'));
 end $$;
 grant execute on function public.clinical_record(uuid) to authenticated;
 
@@ -306,7 +307,7 @@ declare
  row_lot clinic.stock_lots; row_package clinic.packages; row_till clinic.tills; row_result clinic.results; row_appointment clinic.appointments;
  line jsonb; lines jsonb:='[]'; total numeric:=0; num text; result jsonb; rate numeric; v_redemption_amount numeric; v_invoice_amount numeric; v_exchange_rate numeric; v_refundable numeric; v_allocatable numeric;
 begin
- if o is null or actor is null then raise exception 'Not authenticated' using errcode='42501'; end if;
+ if o is null or actor is null or not clinic.session_valid() or exists(select 1 from clinic.memberships where user_id=actor and organization_id=o and password_change_required) then raise exception 'Not authenticated' using errcode='42501'; end if;
  if request_id is null or jsonb_typeof(payload)<>'object' or octet_length(payload::text)>200000 then raise exception 'Invalid request'; end if;
  perform pg_advisory_xact_lock(hashtextextended(o::text,0));
  select * into previous from clinic.requests r where r.organization_id=o and r.actor_id=actor and r.request_id=command.request_id;
@@ -333,7 +334,7 @@ begin
  if row_patient.phone is distinct from nullif(payload->>'phone','') and row_patient.phone is not null then insert into clinic.contacts(organization_id,patient_id,phone,owner_name,valid_to) values(o,p,row_patient.phone,row_patient.contact_owner,now()); end if;
  update clinic.patients set full_name=trim(payload->>'full_name'),phone=nullif(payload->>'phone',''),contact_owner=payload->>'contact_owner',birth_date=nullif(payload->>'birth_date','')::date,birth_precision=coalesce(payload->>'birth_precision','unknown'),gender=coalesce(payload->>'gender','unknown'),language=coalesce(payload->>'language','ckb'),guardian_name=payload->>'guardian_name',guardian_relationship=payload->>'guardian_relationship',communication_consent=coalesce((payload->>'communication_consent')::boolean,false),version=version+1,updated_at=now() where id=p returning id into rid;
  when 'patient.merge' then
- perform clinic.require_permission('approve');
+ perform clinic.require_approval(coalesce(amt,0),curr);
  if row_patient.version is distinct from (payload->>'version')::integer then raise exception 'Patient changed. Refresh and review identity before merging.' using errcode='40001'; end if;
  a:=(payload->>'target_id')::uuid;
  if p=a or length(trim(coalesce(payload->>'reason','')))<8 then raise exception 'A different target and documented identity review are required'; end if;
@@ -344,9 +345,9 @@ begin
  when 'appointment.create' then
  perform clinic.require_permission('schedule');
  a:=(payload->>'doctor_id')::uuid;
- if not exists(select 1 from clinic.memberships where user_id=a and organization_id=o and active and role='doctor') then raise exception 'Select an active clinician'; end if;
+ if not exists(select 1 from clinic.memberships where user_id=a and organization_id=o and active and clinic.has_role(user_id,'doctor')) then raise exception 'Select an active clinician'; end if;
  if exists(select 1 from clinic.appointments where organization_id=o and doctor_id=a and status not in ('cancelled','no_show') and starts_at<(payload->>'ends_at')::timestamptz and ends_at>(payload->>'starts_at')::timestamptz) then raise exception 'The clinician already has an appointment at this time' using errcode='23P01'; end if;
- insert into clinic.appointments(organization_id,branch_id,patient_id,doctor_id,starts_at,ends_at,service_name,walk_in,status,checked_in_at) values(o,clinic.branch_id(),p,a,(payload->>'starts_at')::timestamptz,(payload->>'ends_at')::timestamptz,payload->>'service_name',coalesce((payload->>'walk_in')::boolean,false),case when (payload->>'walk_in')::boolean then 'checked_in' else 'scheduled' end,case when (payload->>'walk_in')::boolean then now() end) returning id into rid;
+ insert into clinic.appointments(organization_id,branch_id,patient_id,doctor_id,starts_at,ends_at,service_name,walk_in,status,checked_in_at,resource_id) values(o,clinic.branch_id(),p,a,(payload->>'starts_at')::timestamptz,(payload->>'ends_at')::timestamptz,payload->>'service_name',coalesce((payload->>'walk_in')::boolean,false),case when (payload->>'walk_in')::boolean then 'checked_in' else 'scheduled' end,case when (payload->>'walk_in')::boolean then now() end,nullif(payload->>'resource_id','')::uuid) returning id into rid;
  when 'appointment.status' then
  perform clinic.require_permission('schedule');
  select * into row_appointment from clinic.appointments where id=(payload->>'id')::uuid;
@@ -359,8 +360,9 @@ begin
  perform clinic.require_permission('clinical');
  if nullif(payload->>'appointment_id','') is not null and not exists(select 1 from clinic.appointments where id=(payload->>'appointment_id')::uuid and patient_id=p and doctor_id=actor and organization_id=o) then raise exception 'Appointment does not belong to this patient and clinician'; end if;
  if nullif(payload->>'id','') is null then
- insert into clinic.encounters(organization_id,patient_id,doctor_id,branch_id,appointment_id,chief_complaint,history,allergies,findings,diagnosis,plan,prescriptions,clinical_sex_notes,birth_snapshot)
- values(o,p,actor,clinic.branch_id(),nullif(payload->>'appointment_id','')::uuid,payload->>'chief_complaint',coalesce(payload->>'history',''),coalesce(payload->>'allergies','Not reviewed'),coalesce(payload->>'findings',''),coalesce(payload->>'diagnosis',''),coalesce(payload->>'plan',''),coalesce(payload->>'prescriptions',''),coalesce(payload->>'clinical_sex_notes',''),jsonb_build_object('birth_date',row_patient.birth_date,'precision',row_patient.birth_precision,'reported_age',row_patient.reported_age,'age_recorded_on',row_patient.age_recorded_on)) returning id into rid;
+ if nullif(payload->>'template_id','') is not null and not exists(select 1 from clinic.document_templates t where t.id=(payload->>'template_id')::uuid and t.organization_id=o and t.status='approved' and t.kind='clinical') then raise exception 'Select an approved clinical template';end if;
+ insert into clinic.encounters(organization_id,patient_id,doctor_id,branch_id,appointment_id,chief_complaint,history,allergies,findings,diagnosis,plan,prescriptions,clinical_sex_notes,template_id,template_snapshot,birth_snapshot)
+ values(o,p,actor,clinic.branch_id(),nullif(payload->>'appointment_id','')::uuid,payload->>'chief_complaint',coalesce(payload->>'history',''),coalesce(payload->>'allergies','Not reviewed'),coalesce(payload->>'findings',''),coalesce(payload->>'diagnosis',''),coalesce(payload->>'plan',''),coalesce(payload->>'prescriptions',''),coalesce(payload->>'clinical_sex_notes',''),nullif(payload->>'template_id','')::uuid,(select to_jsonb(t) from clinic.document_templates t where t.id=nullif(payload->>'template_id','')::uuid and t.organization_id=o),jsonb_build_object('birth_date',row_patient.birth_date,'precision',row_patient.birth_precision,'reported_age',row_patient.reported_age,'age_recorded_on',row_patient.age_recorded_on)) returning id into rid;
  else
  select * into row_enc from clinic.encounters where id=(payload->>'id')::uuid;
  if not found or row_enc.doctor_id<>actor then raise exception 'Only the author may edit this draft' using errcode='42501'; end if;
@@ -382,14 +384,16 @@ begin
  perform clinic.require_permission('clinical');
  if not exists(select 1 from clinic.encounters where id=e and patient_id=p) then raise exception 'Encounter does not belong to patient'; end if;
  if not exists(select 1 from clinic.consents c where patient_id=p and purpose='procedure' and granted and not exists(select 1 from clinic.consents n where n.patient_id=p and n.purpose=c.purpose and n.created_at>c.created_at)) then raise exception 'Current procedure consent is required'; end if;
- insert into clinic.procedures(organization_id,patient_id,encounter_id,name,body_site,product,lot_number,settings,quantity,aftercare,adverse_event) values(o,p,e,payload->>'name',payload->>'body_site',payload->>'product',payload->>'lot_number',payload->>'settings',nullif(payload->>'quantity','')::numeric,payload->>'aftercare',payload->>'adverse_event') returning id into rid;
+ if nullif(payload->>'template_id','') is not null and not exists(select 1 from clinic.document_templates t where t.id=(payload->>'template_id')::uuid and t.organization_id=o and t.status='approved' and t.kind in ('procedure','aftercare')) then raise exception 'Select an approved procedure or aftercare template';end if;
+ insert into clinic.procedures(organization_id,patient_id,encounter_id,name,body_site,product,lot_number,settings,quantity,aftercare,adverse_event,template_id,template_snapshot) values(o,p,e,payload->>'name',payload->>'body_site',payload->>'product',payload->>'lot_number',payload->>'settings',nullif(payload->>'quantity','')::numeric,payload->>'aftercare',payload->>'adverse_event',nullif(payload->>'template_id','')::uuid,(select to_jsonb(t) from clinic.document_templates t where t.id=nullif(payload->>'template_id','')::uuid and t.organization_id=o)) returning id into rid;
  when 'consent.record' then
  perform clinic.require_permission('patients');
  if payload->>'purpose'<>'communication' then perform clinic.require_permission('clinical'); end if;
- insert into clinic.consents(organization_id,patient_id,purpose,granted,template_version,evidence) values(o,p,payload->>'purpose',(payload->>'granted')::boolean,payload->>'template_version',payload->>'evidence') returning id into rid;
+ if nullif(payload->>'template_id','') is not null and not exists(select 1 from clinic.document_templates t where t.id=(payload->>'template_id')::uuid and t.organization_id=o and t.status='approved' and t.kind='consent') then raise exception 'Select an approved consent template';end if;
+ insert into clinic.consents(organization_id,patient_id,purpose,granted,template_version,evidence,template_id,template_snapshot) values(o,p,payload->>'purpose',(payload->>'granted')::boolean,case when nullif(payload->>'template_id','') is null then payload->>'template_version' else (select t.version::text from clinic.document_templates t where t.id=(payload->>'template_id')::uuid and t.organization_id=o) end,payload->>'evidence',nullif(payload->>'template_id','')::uuid,(select to_jsonb(t) from clinic.document_templates t where id=nullif(payload->>'template_id','')::uuid and organization_id=o and status='approved')) returning id into rid;
  when 'task.create' then
  perform clinic.require_permission('results');
- if not exists(select 1 from clinic.memberships where user_id=(payload->>'assigned_to')::uuid and organization_id=o and active and role='doctor') then raise exception 'Select an active clinician'; end if;
+ if not exists(select 1 from clinic.memberships where user_id=(payload->>'assigned_to')::uuid and organization_id=o and active and clinic.has_role(user_id,'doctor')) then raise exception 'Select an active clinician'; end if;
  insert into clinic.tasks(organization_id,patient_id,title,due_at,assigned_to) values(o,p,payload->>'title',(payload->>'due_at')::timestamptz,(payload->>'assigned_to')::uuid) returning id into rid;
  when 'task.complete' then
  perform clinic.require_permission('results');
@@ -422,7 +426,7 @@ begin
  end loop;
  num:='INV-'||lpad(((select count(*) from clinic.invoices where organization_id=o)+1)::text,6,'0');
  if nullif(payload->>'discount','') is not null and (payload->>'discount')::numeric<>0 then
- perform clinic.require_permission('approve');amt:=(payload->>'discount')::numeric;
+ perform clinic.require_permission('approve');amt:=(payload->>'discount')::numeric;perform clinic.require_approval(amt,curr);
  if amt<0 or amt>=total or amt<>round(amt,case when curr='USD' then 2 else 3 end) then raise exception 'Discount must be positive, precise and smaller than invoice total'; end if;
  if length(trim(coalesce(payload->>'discount_reason','')))<5 then raise exception 'A discount reason is required'; end if;
  lines:=lines||jsonb_build_array(jsonb_build_object('description','Discount: '||(payload->>'discount_reason'),'quantity',1,'unit_price',-amt,'amount',-amt));total:=total-amt;
@@ -430,7 +434,7 @@ begin
  insert into clinic.invoices(organization_id,patient_id,invoice_number,patient_snapshot,currency,lines,total) values(o,p,num,jsonb_build_object('full_name',row_patient.full_name,'patient_number',row_patient.patient_number),curr,lines,total) returning id into rid;
  perform clinic.post_journal(curr,num,'invoice',rid,'receivable','revenue',total);
  when 'invoice.credit' then
- perform clinic.require_permission('approve');a:=(payload->>'invoice_id')::uuid;
+ perform clinic.require_approval(coalesce(amt,0),curr);a:=(payload->>'invoice_id')::uuid;
  select * into row_invoice from clinic.invoices where id=a;
  if not found or curr<>row_invoice.currency then raise exception 'Invoice or currency mismatch'; end if;
  select clinic.invoice_balance(a) into due;
@@ -472,7 +476,7 @@ begin
  insert into clinic.payments(organization_id,patient_id,invoice_id,patient_snapshot,currency,amount,method,kind) values(o,p,a,jsonb_build_object('full_name',row_patient.full_name,'patient_number',row_patient.patient_number),curr,amt,'deposit','deposit_application') returning id into rid;
  perform clinic.post_journal(curr,'Apply patient deposit','deposit_application',rid,'deposits','receivable',amt);
  when 'refund.record' then
- perform clinic.require_permission('approve');
+ perform clinic.require_approval(coalesce(amt,0),curr);
  select * into row_payment from clinic.payments pm where id=(payload->>'payment_id')::uuid and pm.kind in ('payment','deposit');
  if not found then raise exception 'Original payment not found'; end if;
  if length(trim(coalesce(payload->>'reason','')))<5 then raise exception 'A refund reason is required'; end if;
@@ -501,7 +505,7 @@ begin
  insert into clinic.expenses(organization_id,category,supplier,description,currency,amount,paid,method) values(o,payload->>'category',payload->>'supplier',payload->>'description',curr,amt,(payload->>'paid')::boolean,method) returning id into rid;
  perform clinic.post_journal(curr,payload->>'description','expense',rid,'expense',case when (payload->>'paid')::boolean then method else 'payable' end,amt);
  when 'cash.record' then
- perform clinic.require_permission('approve');
+ perform clinic.require_approval(coalesce(amt,0),curr);
  if payload->>'kind' not in ('owner_contribution','owner_withdrawal','owner_loan','transfer','opening_balance') then raise exception 'Invalid cash movement type'; end if;
  if payload->>'kind'='transfer' and (payload->>'destination'=method or payload->>'destination' not in ('cash','bank','card') or payload->>'destination' is null) then raise exception 'Select a different destination account'; end if;
  if amt is null then raise exception 'Amount is required'; end if;
@@ -510,7 +514,7 @@ begin
  case when payload->>'kind'='owner_withdrawal' then 'equity' when payload->>'kind'='transfer' then payload->>'destination' else method end,
  case when payload->>'kind'='owner_withdrawal' or payload->>'kind'='transfer' then method when payload->>'kind'='owner_loan' then 'owner_loan' else 'equity' end,amt);
  when 'fx.exchange' then
- perform clinic.require_permission('approve'); rate:=(payload->>'rate')::numeric;
+ perform clinic.require_approval(coalesce(amt,0),curr); rate:=(payload->>'rate')::numeric;
  if amt is null or rate<=0 or rate<>round(rate,6) or curr=payload->>'destination_currency' or payload->>'destination_currency' not in ('IQD','USD') then raise exception 'Provide two currencies and a positive explicit conversion rate'; end if;
  total:=round(amt*rate,case when payload->>'destination_currency'='USD' then 2 else 3 end);
  insert into clinic.cash_movements(organization_id,kind,currency,amount,method,description,fx_rate) values(o,'fx_exchange',curr,amt,method,'FX out: '||(payload->>'description'),rate) returning id into rid;
@@ -519,9 +523,15 @@ begin
  perform clinic.post_journal(payload->>'destination_currency','FX in','fx',a,method,'fx_clearing',total);
  when 'stock.receive' then
  perform clinic.require_permission('inventory');
+ if nullif(payload->>'product_id','') is not null then
+ select to_jsonb(x) into result from clinic.inventory_products x where x.id=(payload->>'product_id')::uuid and x.organization_id=o and x.active;
+ if result is null or (payload?'unit' and payload->>'unit' is distinct from result->>'unit') then raise exception 'Select an active product with the correct stock unit';end if;
+ payload:=payload||jsonb_build_object('product',result->>'name','unit',result->>'unit');
+ end if;
+ if exists(select 1 from clinic.stock_lots where organization_id=o and product=payload->>'product' and lot_number=payload->>'lot_number' and (unit is distinct from payload->>'unit' or expires_on is distinct from (payload->>'expires_on')::date)) then raise exception 'Lot unit or expiry differs. Review the batch identity before receiving stock.';end if;
  if amt is null then raise exception 'Quantity required'; end if;
- insert into clinic.stock_lots(organization_id,product,lot_number,expires_on,unit,quantity) values(o,payload->>'product',payload->>'lot_number',(payload->>'expires_on')::date,payload->>'unit',amt)
- on conflict(organization_id,product,lot_number) do update set quantity=clinic.stock_lots.quantity+excluded.quantity,version=clinic.stock_lots.version+1 returning id into rid;
+ insert into clinic.stock_lots(organization_id,product,lot_number,expires_on,unit,quantity,product_id) values(o,payload->>'product',payload->>'lot_number',(payload->>'expires_on')::date,payload->>'unit',amt,nullif(payload->>'product_id','')::uuid)
+ on conflict(organization_id,product,lot_number) do update set quantity=clinic.stock_lots.quantity+excluded.quantity,version=clinic.stock_lots.version+1,product_id=coalesce(clinic.stock_lots.product_id,excluded.product_id) returning id into rid;
  insert into clinic.stock_movements(organization_id,lot_id,quantity,reason) values(o,rid,amt,'Receipt');
  when 'stock.use' then
  perform clinic.require_permission('clinical');
@@ -547,13 +557,13 @@ begin
  when 'package.sell' then
  perform clinic.require_permission('billing');
  if amt is null or (payload->>'sessions')::integer not between 1 and 1000 then raise exception 'Package amount and valid session count are required'; end if;
- insert into clinic.packages(organization_id,patient_id,name,sessions,remaining,currency,total) values(o,p,payload->>'name',(payload->>'sessions')::integer,(payload->>'sessions')::integer,curr,amt) returning id into rid;
+ insert into clinic.packages(organization_id,patient_id,name,sessions,remaining,currency,total,sale_method,expires_on,patient_snapshot) values(o,p,payload->>'name',(payload->>'sessions')::integer,(payload->>'sessions')::integer,curr,amt,method,nullif(payload->>'expires_on','')::date,jsonb_build_object('full_name',row_patient.full_name,'patient_number',row_patient.patient_number)) returning id into rid;
  perform clinic.post_journal(curr,'Prepaid treatment package','package_sale',rid,method,'deposits',amt);
  when 'package.redeem' then
  perform clinic.require_permission('billing');
  select * into row_package from clinic.packages where id=(payload->>'package_id')::uuid and patient_id=p;
  e:=(payload->>'encounter_id')::uuid;
- if not found or row_package.remaining<=0 then raise exception 'Package has no available sessions'; end if;
+ if not found or row_package.remaining<=0 or row_package.cancelled_at is not null or row_package.expires_on<(now() at time zone 'Asia/Baghdad')::date then raise exception 'Package has no available sessions or is cancelled/expired'; end if;
  if clinic.billing_encounter_patient(e) is distinct from p then raise exception 'A signed encounter for this patient is required'; end if;
  total:=case when row_package.remaining=1 then row_package.total-row_package.redeemed_value else round(row_package.total/row_package.sessions,case when row_package.currency='USD' then 2 else 3 end) end;
  insert into clinic.package_redemptions(organization_id,package_id,encounter_id) values(o,row_package.id,e) returning id into rid;
@@ -567,12 +577,13 @@ begin
  rid:=clinic.post_journal(curr,'Supplier payable settlement','expense_payment',(payload->>'expense_id')::uuid,'payable',method,total);
  when 'member.update' then
  perform clinic.require_permission('staff');
+ if not exists(select 1 from clinic.memberships where user_id=actor and organization_id=o and role='owner') and (payload->>'role' in ('owner','administrator','accountant') or exists(select 1 from clinic.memberships where user_id=(payload->>'user_id')::uuid and organization_id=o and role in ('owner','administrator','accountant'))) then raise exception 'Only the owner may manage privileged roles' using errcode='42501'; end if;
  a:=(payload->>'user_id')::uuid;
  if a=actor then raise exception 'You cannot change your own access'; end if;
  if payload->>'role' not in ('owner','administrator','doctor','receptionist','accountant') then raise exception 'Invalid role'; end if;
  update clinic.memberships set role=payload->>'role',active=(payload->>'active')::boolean where user_id=a and organization_id=o returning id into rid;
  when 'journal.post' then
- perform clinic.require_permission('approve');
+ perform clinic.require_approval(coalesce(amt,0),curr);
  if amt is null or payload->>'debit_account'=payload->>'credit_account' or length(trim(coalesce(payload->>'description','')))<5 then raise exception 'Use different accounts and explain the adjustment'; end if;
  rid:=clinic.post_journal(curr,payload->>'description','manual',gen_random_uuid(),payload->>'debit_account',payload->>'credit_account',amt);
  else raise exception 'Unsupported operation: %',kind using errcode='22023';

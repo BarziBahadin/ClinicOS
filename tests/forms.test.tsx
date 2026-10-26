@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, act } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { CommandDialog } from "../src/components/ui";
 import { patientAction } from "../src/features/actions";
@@ -86,6 +86,36 @@ describe("Patient form integrity", () => {
     await user.type(screen.getByLabelText("Full name *"), "Unsaved patient");
     await user.click(screen.getByRole("button", { name: /^Cancel$/ }));
     expect(confirm).toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+  it("ignores a submitted form response after its patient/session view unmounts", async () => {
+    let resolve!: (value: { id: string }) => void;
+    vi.mocked(execute).mockImplementationOnce(
+      () =>
+        new Promise((r) => {
+          resolve = r;
+        }),
+    );
+    const onSaved = vi.fn(),
+      onClose = vi.fn(),
+      user = userEvent.setup();
+    const view = render(
+      <CommandDialog
+        action={patientAction()}
+        t={(s) => s}
+        data={data}
+        onSaved={onSaved}
+        onClose={onClose}
+      />,
+    );
+    await user.type(screen.getByLabelText("Full name *"), "Previous patient");
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await waitFor(() => expect(execute).toHaveBeenCalledOnce());
+    view.unmount();
+    await act(async () => {
+      resolve({ id: "old-record" });
+    });
+    expect(onSaved).not.toHaveBeenCalled();
     expect(onClose).not.toHaveBeenCalled();
   });
 });

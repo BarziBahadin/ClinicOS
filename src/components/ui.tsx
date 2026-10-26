@@ -1,4 +1,9 @@
+import { useRequestScope } from "../lib/request-scope";
 import { PatientSelect } from "./PatientSelect";
+import { EncounterSelect } from "./EncounterSelect";
+import { PostingSelect } from "./PostingSelect";
+import { ResourceSelect } from "./ResourceSelect";
+import { translate } from "../lib/i18n";
 import {
   useEffect,
   useRef,
@@ -18,6 +23,10 @@ import type { CommandName, Row, Snapshot } from "../domain/types";
 import { execute } from "../lib/api";
 export type T = (s: string) => string;
 export type Field = {
+  statementId?: string;
+  patientId?: string;
+  encounterStatus?: "signed" | "draft";
+  ownOnly?: boolean;
   name: string;
   label: string;
   type?: string;
@@ -30,18 +39,61 @@ export type Field = {
   max?: string;
   step?: string;
 };
+export function SectionNav({
+  label,
+  items,
+  active,
+  onChange,
+  t,
+}: {
+  label: string;
+  items: { id: string; label: string }[];
+  active: string;
+  onChange: (id: string) => void;
+  t: T;
+}) {
+  return (
+    <nav aria-label={t(label)} className="section-nav">
+      <div className="segmented">
+        {items.map((item) => (
+          <button
+            key={item.id}
+            className={active === item.id ? "selected" : ""}
+            aria-current={active === item.id ? "page" : undefined}
+            onClick={() => onChange(item.id)}
+          >
+            {t(item.label)}
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
 export function Empty({
   t,
   text = "Nothing here yet",
+  hint = "Records will appear here when available.",
+  loading = false,
 }: {
   t: T;
   text?: string;
+  hint?: string;
+  loading?: boolean;
 }) {
+  if (loading) return <Loading t={t} />;
   return (
     <div className="empty">
       <Inbox size={30} strokeWidth={1.3} />
       <strong>{t(text)}</strong>
-      <p>{t("Start with a new record using the action above.")}</p>
+      {hint && <p>{t(hint)}</p>}
+    </div>
+  );
+}
+export function Loading({ t }: { t: T }) {
+  return (
+    <div className="empty" role="status">
+      <LoaderCircle className="spin" size={24} />
+      <span>{t("Loading…")}</span>
     </div>
   );
 }
@@ -69,7 +121,12 @@ export function DataTable({
   children: ReactNode;
 }) {
   return (
-    <div className="table-scroll">
+    <div
+      className="table-scroll"
+      tabIndex={0}
+      role="region"
+      aria-label={heads.join(" · ")}
+    >
       <table>
         <thead>
           <tr>
@@ -97,10 +154,12 @@ export function Dialog({
   title,
   children,
   onClose,
+  busy = false,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
+  busy?: boolean;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -113,12 +172,20 @@ export function Dialog({
       aria-labelledby="dialog-title"
       onCancel={(e) => {
         e.preventDefault();
-        onClose();
+        if (!busy) onClose();
       }}
     >
       <div className="dialog-head">
         <h2 id="dialog-title">{title}</h2>
-        <button className="icon-button" aria-label="Close" onClick={onClose}>
+        <button
+          className="icon-button"
+          disabled={busy}
+          aria-label={translate(
+            document.documentElement.lang === "ckb" ? "ckb" : "en",
+            "Close",
+          )}
+          onClick={onClose}
+        >
           <X size={20} />
         </button>
       </div>
@@ -126,7 +193,15 @@ export function Dialog({
     </dialog>
   );
 }
-export function InputField({ field, t }: { field: Field; t: T }) {
+export function InputField({
+  field,
+  t,
+  patientId,
+}: {
+  field: Field;
+  t: T;
+  patientId?: string;
+}) {
   const id = `field-${field.name}`;
   return (
     <label
@@ -139,6 +214,14 @@ export function InputField({ field, t }: { field: Field; t: T }) {
       </span>
       {field.name === "patient_id" || field.type === "patient" ? (
         <PatientSelect field={field} t={t} />
+      ) : field.name === "encounter_id" ? (
+        <EncounterSelect field={field} t={t} patientId={patientId} />
+      ) : field.name === "journal_line_id" ? (
+        <PostingSelect field={field} t={t} />
+      ) : field.name === "resource_id" ? (
+        <ResourceSelect field={field} t={t} />
+      ) : field.name === "supplier_id" ? (
+        <ResourceSelect field={field} t={t} recordType="suppliers" />
       ) : field.options ? (
         <select
           id={id}
@@ -196,6 +279,7 @@ export function InputField({ field, t }: { field: Field; t: T }) {
   );
 }
 export interface Action {
+  instructions?: string;
   title: string;
   kind: CommandName;
   fields: Field[];
@@ -217,9 +301,17 @@ export function CommandDialog({
   const [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [dirty, setDirty] = useState(false);
+  const requestScope = useRequestScope();
   const attempt = useRef<{ body: string; id: string } | null>(null);
   const [currency, setCurrency] = useState("IQD");
   const [lineIds, setLineIds] = useState([crypto.randomUUID()]);
+  const [activePatient, setActivePatient] = useState(
+    String(
+      action.fixed?.patient_id ??
+        action.fields.find((f) => f.name === "patient_id")?.value ??
+        "",
+    ),
+  );
   useEffect(() => {
     const handler = (e: BeforeUnloadEvent) => {
       if (dirty) {
@@ -237,6 +329,7 @@ export function CommandDialog({
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setError("");
+    const isCurrent = requestScope();
     const form = new FormData(event.currentTarget);
     const payload: Record<string, unknown> = { ...action.fixed };
     for (const field of action.fields) {
@@ -277,6 +370,10 @@ export function CommandDialog({
                 : b;
         }
       }
+      if (action.kind === "contact.add") {
+        const { normalizePhone } = await import("../domain/phone");
+        payload.phone = normalizePhone(String(payload.phone ?? ""));
+      }
       const { clinicDateTime } = await import("../domain/time");
       for (const key of ["starts_at", "ends_at", "due_at"])
         if (payload[key])
@@ -291,31 +388,60 @@ export function CommandDialog({
           quantity: Number(form.get(`quantity-${id}`)),
         }));
       }
+      if (action.kind === "finance.mapping.create") {
+        payload.codes = Object.fromEntries(
+          Object.entries(payload)
+            .filter(([key]) => key.startsWith("code_"))
+            .map(([key, value]) => [key.slice(5), value]),
+        );
+        for (const key of Object.keys(payload))
+          if (key.startsWith("code_")) delete payload[key];
+      }
       const body = JSON.stringify(payload);
       if (attempt.current?.body !== body)
         attempt.current = { body, id: crypto.randomUUID() };
+      if (!isCurrent()) return;
       setBusy(true);
       await execute(action.kind, payload, attempt.current!.id);
+      if (!isCurrent()) return;
       setDirty(false);
       await onSaved();
-      onClose();
+      if (isCurrent()) onClose();
     } catch (err) {
+      if (!isCurrent()) return;
       setError(
         err instanceof Error
           ? err.message
           : "Unable to save. Retry with the same form to safely check the result.",
       );
     } finally {
-      setBusy(false);
+      if (isCurrent()) setBusy(false);
     }
   }
   return (
-    <Dialog title={t(action.title)} onClose={close}>
-      <form onSubmit={submit} onChange={() => setDirty(true)}>
+    <Dialog title={t(action.title)} onClose={close} busy={busy}>
+      <form
+        onSubmit={submit}
+        onChange={(e) => {
+          setDirty(true);
+          const selected = new FormData(e.currentTarget).get("patient_id");
+          if (selected) setActivePatient(String(selected));
+        }}
+      >
         <div className="dialog-body">
+          {action.instructions && (
+            <p dir="auto" style={{ whiteSpace: "pre-wrap" }}>
+              {action.instructions}
+            </p>
+          )}
           <div className="form-grid">
             {action.fields.map((field) => (
-              <InputField key={field.name} field={field} t={t} />
+              <InputField
+                key={field.name}
+                field={field}
+                t={t}
+                patientId={activePatient}
+              />
             ))}
           </div>
           {action.kind === "invoice.issue" && (
@@ -388,9 +514,25 @@ export function CommandDialog({
           >
             {t("Cancel")}
           </button>
-          <button className="button primary" disabled={busy}>
+          <button
+            className={`button ${action.kind === "patient.merge" || action.fixed?.status === "cancelled" ? "secondary danger" : "primary"}`}
+            disabled={busy}
+          >
             {busy ? <LoaderCircle size={16} className="spin" /> : null}
-            {t(busy ? "Saving…" : "Save")}
+            {t(
+              busy
+                ? "Saving…"
+                : action.kind === "appointment.status" &&
+                    action.fixed?.status === "cancelled"
+                  ? "Cancel appointment"
+                  : ((
+                      {
+                        "invoice.issue": "Issue invoice",
+                        "patient.create": "Register patient",
+                        "appointment.create": "Book appointment",
+                      } as Record<string, string>
+                    )[action.kind] ?? action.title),
+            )}
           </button>
         </footer>
       </form>

@@ -80,7 +80,7 @@ if (mode === "create") {
     db = new pg.Client({ connectionString: status.DB_URL });
   await db.connect();
   const { rows } = await db.query(
-    "select object_key,mime_type from clinic.media where status='ready' order by id",
+    "select object_key,mime_type from clinic.media where status='ready' union all select preview_key as object_key,'image/png' as mime_type from clinic.media where status='ready' and preview_key is not null order by object_key",
   );
   await db.end();
   const file = `${folder}/clinicos.backup`,
@@ -156,7 +156,11 @@ if (mode === "create") {
   const decipher = createDecipheriv("aes-256-gcm", key, iv);
   decipher.setAuthTag(tag);
   const stream = createGunzip();
-  const decrypt = pipeline(createReadStream(input, {start:12,end:size-17}),decipher,stream);
+  const decrypt = pipeline(
+    createReadStream(input, { start: 12, end: size - 17 }),
+    decipher,
+    stream,
+  );
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const verifiedDestination = `.local/backups/verified-${Date.now()}`;
   const destination = `${verifiedDestination}.partial`;
@@ -166,13 +170,19 @@ if (mode === "create") {
   const digest = createHash("sha256");
   let count = 0,
     complete = false;
-  const objects:{key:string;mime_type:string;sha256:string;file:string}[]=[];
+  const objects: {
+    key: string;
+    mime_type: string;
+    sha256: string;
+    file: string;
+  }[] = [];
   const verify = async () => {
     for await (const line of lines) {
       const r = JSON.parse(line);
-      if(complete)throw new Error("Unexpected data after backup completion");
-      if(r.type==="manifest"){if(r.version!==1)throw new Error("Unsupported backup version");}
-      else if (r.type === "database") {
+      if (complete) throw new Error("Unexpected data after backup completion");
+      if (r.type === "manifest") {
+        if (r.version !== 1) throw new Error("Unsupported backup version");
+      } else if (r.type === "database") {
         const b = Buffer.from(r.bytes, "base64");
         appendFileSync(dump, b);
         digest.update(b);
@@ -182,23 +192,37 @@ if (mode === "create") {
           throw new Error("Object checksum mismatch");
         const safe = createHash("sha256").update(r.key).digest("hex");
         writeFileSync(`${destination}/${safe}`, b, { mode: 0o600 });
-        objects.push({key:r.key,mime_type:r.mime,sha256:r.sha256,file:safe});
+        objects.push({
+          key: r.key,
+          mime_type: r.mime,
+          sha256: r.sha256,
+          file: safe,
+        });
         count++;
       } else if (r.type === "complete") {
         if (r.objects !== count || r.database_sha256 !== digest.digest("hex"))
           throw new Error("Backup manifest mismatch");
         complete = true;
-      }else throw new Error("Unknown backup record");
+      } else throw new Error("Unknown backup record");
     }
     if (!complete) throw new Error("Backup is incomplete");
   };
   try {
-    await Promise.all([verify(),decrypt]);
-    writeFileSync(`${destination}/objects.json`,JSON.stringify(objects,null,2),{mode:0o600});
-    renameSync(destination,verifiedDestination);
-  } catch(error){
-    stream.destroy();lines.close();await decrypt.catch(()=>{});
-    rmSync(destination,{recursive:true,force:true});throw error;
+    await Promise.all([verify(), decrypt]);
+    writeFileSync(
+      `${destination}/objects.json`,
+      JSON.stringify(objects, null, 2),
+      { mode: 0o600 },
+    );
+    renameSync(destination, verifiedDestination);
+  } catch (error) {
+    stream.destroy();
+    lines.close();
+    await decrypt.catch(() => {});
+    rmSync(destination, { recursive: true, force: true });
+    throw error;
   }
-  console.log(`Verified encrypted backup: ${count} media objects. Local restore input: ${verifiedDestination}/database.dump`);
+  console.log(
+    `Verified encrypted backup: ${count} media objects. Local restore input: ${verifiedDestination}/database.dump`,
+  );
 } else throw new Error("Supported modes: create, verify");

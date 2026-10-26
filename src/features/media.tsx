@@ -1,4 +1,11 @@
-import { useRef, useState, type FormEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FormEvent,
+} from "react";
+import { client } from "../lib/supabase";
 import { FileImage, Upload } from "lucide-react";
 import { invoke } from "../lib/functions";
 import type { Row, Snapshot } from "../domain/types";
@@ -7,35 +14,73 @@ import {
   Empty,
   ErrorMessage,
   InputField,
-  options,
   type T,
 } from "../components/ui";
 import { patient, text } from "./actions";
+import { RecordPager, useRecordPage } from "../components/RecordPager";
+export function MediaWorkspace(props: Parameters<typeof MediaPanel>[0]) {
+  const page = useRecordPage("media", props.data, props.patientId);
+  return (
+    <>
+      <RecordPager page={page} t={props.t} />
+      <MediaPanel {...props} data={{ ...props.data, media: page.items }} />
+    </>
+  );
+}
 export function MediaPanel({
   data,
   t,
   patientId,
   onSaved,
+  sessionKey,
 }: {
   data: Snapshot;
   t: T;
   patientId?: string;
   onSaved: () => Promise<void>;
+  sessionKey: string;
 }) {
   const [open, setOpen] = useState(false),
+    [retryRow, setRetryRow] = useState<Row | null>(null),
     [busy, setBusy] = useState(false),
     [error, setError] = useState(""),
     [images, setImages] = useState<
-      { id: string; url: string; title: string; mime: string }[]
+      {
+        id: string;
+        patientId: unknown;
+        url: string;
+        title: string;
+        mime: string;
+        original: boolean;
+      }[]
     >([]);
   const rows = data.media.filter(
-    (m) => (!patientId || m.patient_id === patientId) && m.status === "ready",
+    (m) => !patientId || m.patient_id === patientId,
   );
   const uploadAttempt = useRef<{ fingerprint: string; id: string } | null>(
     null,
   );
+  const generation = useRef(0);
+  const readRequests = useRef(new Map<string, number>());
+  const preview = useRef<HTMLDivElement>(null);
+  const [uploadPatient, setUploadPatient] = useState(patientId ?? "");
+  useLayoutEffect(() => {
+    generation.current++;
+    setImages([]);
+    setError("");
+    setOpen(false);
+    setBusy(false);
+    uploadAttempt.current = null;
+    readRequests.current.clear();
+    setRetryRow(null);
+    setUploadPatient(patientId ?? "");
+    return () => {
+      generation.current++;
+    };
+  }, [patientId, sessionKey]);
   async function upload(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    const requestGeneration = generation.current;
     setBusy(true);
     setError("");
     try {
@@ -53,38 +98,90 @@ export function MediaPanel({
       const fingerprint =
         JSON.stringify([...form.entries()].filter(([k]) => k !== "file")) +
         digest;
+      if (requestGeneration !== generation.current) return;
       if (uploadAttempt.current?.fingerprint !== fingerprint)
-        uploadAttempt.current = { fingerprint, id: crypto.randomUUID() };
+        uploadAttempt.current = {
+          fingerprint,
+          id: retryRow?.id ?? crypto.randomUUID(),
+        };
       form.set("upload_id", uploadAttempt.current.id);
       await invoke<{ id: string }>("clinical-media", form);
+      if (requestGeneration !== generation.current) return;
       await onSaved();
+      if (requestGeneration !== generation.current) return;
       setOpen(false);
       uploadAttempt.current = null;
     } catch (e) {
+      if (requestGeneration !== generation.current) return;
       setError(e instanceof Error ? e.message : "Upload failed");
     } finally {
-      setBusy(false);
+      if (requestGeneration === generation.current) setBusy(false);
     }
   }
-  async function view(m: Row) {
+  async function view(m: Row, original = false) {
+    const requestGeneration = generation.current;
+    const sequence = (readRequests.current.get(m.id) ?? 0) + 1;
+    readRequests.current.set(m.id, sequence);
     setError("");
     try {
-      const result = await invoke<{ url: string }>("clinical-media", {
-        action: "read",
-        media_id: m.id,
-      });
+      const result = await invoke<{ url: string; mime_type?: string }>(
+        "clinical-media",
+        {
+          action:
+            original || m.mime_type === "application/pdf" ? "read" : "preview",
+          media_id: m.id,
+        },
+      );
+      if (
+        requestGeneration !== generation.current ||
+        readRequests.current.get(m.id) !== sequence
+      )
+        return;
       setImages((prev) => [
-        ...prev.filter((x) => x.id !== m.id).slice(-1),
+        ...prev
+          .filter((x) => x.id !== m.id && x.patientId === m.patient_id)
+          .slice(-1),
         {
           id: m.id,
+          patientId: m.patient_id,
           url: result.url,
           title: String(m.title),
-          mime: String(m.mime_type),
+          mime: result.mime_type ?? String(m.mime_type),
+          original,
         },
       ]);
     } catch (e) {
+      if (requestGeneration !== generation.current) return;
       setError(e instanceof Error ? e.message : "Access denied");
     }
+  }
+  async function regenerate(m: Row) {
+    const requestGeneration = generation.current;
+    setError("");
+    try {
+      await invoke("clinical-media", {
+        action: "regenerate_preview",
+        media_id: m.id,
+      });
+      if (requestGeneration === generation.current) await onSaved();
+    } catch (e) {
+      if (requestGeneration === generation.current)
+        setError(e instanceof Error ? e.message : "Preview generation failed");
+    }
+  }
+  async function cancelUpload(m: Row) {
+    const reason = window.prompt(
+      t("Why is this pending upload being cancelled?"),
+    );
+    if (!reason) return;
+    const requestGeneration = generation.current;
+    const result = await client().rpc("media_cancel_upload", {
+      media_id: m.id,
+      reason,
+    });
+    if (requestGeneration !== generation.current) return;
+    if (result.error) setError(result.error.message);
+    else await onSaved();
   }
   return (
     <section className="panel">
@@ -94,6 +191,9 @@ export function MediaPanel({
           className="button secondary"
           onClick={() => {
             setError("");
+            setRetryRow(null);
+            setUploadPatient(patientId ?? "");
+            uploadAttempt.current = null;
             setOpen(true);
           }}
         >
@@ -104,25 +204,74 @@ export function MediaPanel({
       {error && !open && <ErrorMessage error={error} />}
       <div className="media-grid">
         {rows.map((m) => (
-          <button
-            key={m.id}
-            className="media-card"
-            onClick={() => void view(m)}
-          >
-            <div>
-              <FileImage size={30} strokeWidth={1.1} />
+          <div key={m.id}>
+            <button
+              className="media-card"
+              disabled={m.status !== "ready"}
+              onClick={() => void view(m)}
+            >
+              <div>
+                <FileImage size={30} strokeWidth={1.1} />
+              </div>
+              <strong>{String(m.title)}</strong>
+              <span>
+                {t(
+                  String(m.status).charAt(0).toUpperCase() +
+                    String(m.status).slice(1),
+                )}
+              </span>
+              <span>
+                {String(m.body_site)} ·{" "}
+                {new Date(String(m.created_at)).toLocaleDateString()}
+              </span>
+            </button>
+            <div className="inline-actions">
+              {m.status === "ready" && m.mime_type !== "application/pdf" && (
+                <>
+                  <button
+                    className="text-button"
+                    onClick={() => void view(m, true)}
+                  >
+                    {t("View original")}
+                  </button>
+                  {!m.preview_key && (
+                    <button
+                      className="text-button"
+                      onClick={() => void regenerate(m)}
+                    >
+                      {t("Generate preview")}
+                    </button>
+                  )}
+                </>
+              )}
+              {m.status === "pending" && (
+                <>
+                  <button
+                    className="text-button"
+                    onClick={() => {
+                      setRetryRow(m);
+                      setUploadPatient(String(m.patient_id));
+                      setError("");
+                      setOpen(true);
+                    }}
+                  >
+                    {t("Retry upload")}
+                  </button>
+                  <button
+                    className="text-button"
+                    onClick={() => void cancelUpload(m)}
+                  >
+                    {t("Cancel upload")}
+                  </button>
+                </>
+              )}
             </div>
-            <strong>{String(m.title)}</strong>
-            <span>
-              {String(m.body_site)} ·{" "}
-              {new Date(String(m.created_at)).toLocaleDateString()}
-            </span>
-          </button>
+          </div>
         ))}
       </div>
       {!rows.length && <Empty t={t} />}{" "}
       {images.length > 0 && (
-        <div className="photo-comparison">
+        <div className="photo-comparison" ref={preview}>
           {images.map((i) => (
             <figure key={i.id}>
               {i.mime === "application/pdf" ? (
@@ -135,9 +284,24 @@ export function MediaPanel({
                   {t("View")} · PDF
                 </a>
               ) : (
-                <img src={i.url} alt={i.title} />
+                <img
+                  src={i.url}
+                  alt={i.title}
+                  onLoad={() =>
+                    preview.current?.scrollIntoView({ block: "start" })
+                  }
+                />
               )}
-              <figcaption>{i.title}</figcaption>
+              <figcaption>
+                {i.title} · {t(i.original ? "Original" : "Preview")}
+                {!i.original && i.mime !== "application/pdf" && (
+                  <p>
+                    {t(
+                      "Preview is resized and metadata is removed. The original file is preserved.",
+                    )}
+                  </p>
+                )}
+              </figcaption>
             </figure>
           ))}
         </div>
@@ -147,33 +311,35 @@ export function MediaPanel({
           title={t("Upload document / photo")}
           onClose={() => !busy && setOpen(false)}
         >
-          <form onSubmit={upload}>
+          <form
+            onSubmit={upload}
+            onChange={(e) => {
+              const p = new FormData(e.currentTarget).get("patient_id");
+              if (p) setUploadPatient(String(p));
+            }}
+          >
             <div className="dialog-body form-grid">
-              <InputField t={t} field={patient(data, patientId)} />
-              <InputField t={t} field={text("title", "Title")} />
-              <InputField t={t} field={text("body_site", "Body site")} />
               <InputField
                 t={t}
-                field={{
-                  name: "consent_id",
-                  label: "Consent",
-                  required: true,
-                  options: options(
-                    data.consents
-                      .filter(
-                        (c) =>
-                          c.granted &&
-                          c.purpose === "care_photography" &&
-                          (!patientId || c.patient_id === patientId),
-                      )
-                      .map((c) => ({
-                        ...c,
-                        label: `${data.patients.find((p) => p.id === c.patient_id)?.full_name} · ${String(c.evidence).slice(0, 50)}`,
-                      })),
-                    "label",
-                  ),
-                }}
+                field={patient(
+                  data,
+                  retryRow ? String(retryRow.patient_id) : patientId,
+                )}
               />
+              <InputField
+                t={t}
+                field={text("title", "Title", true, retryRow?.title)}
+              />
+              <InputField
+                t={t}
+                field={text(
+                  "body_site",
+                  "Body site",
+                  true,
+                  retryRow?.body_site,
+                )}
+              />
+              <CurrentConsent patientId={uploadPatient} t={t} />
               <label className="field wide">
                 <span>{t("File")}</span>
                 <input
@@ -194,5 +360,43 @@ export function MediaPanel({
         </Dialog>
       )}
     </section>
+  );
+}
+
+function CurrentConsent({ patientId, t }: { patientId: string; t: T }) {
+  const [rows, setRows] = useState<Row[]>([]),
+    [error, setError] = useState("");
+  useLayoutEffect(() => {
+    setRows([]);
+    setError("");
+  }, [patientId]);
+  useEffect(() => {
+    if (!patientId) return;
+    let cancelled = false;
+    void client()
+      .rpc("current_photography_consent", { patient_id: patientId })
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) setError(error.message);
+        else setRows(data);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [patientId]);
+  return (
+    <label className="field">
+      <span>{t("Current photography consent")}</span>
+      <select name="consent_id" required disabled={!patientId}>
+        <option value="">{t("Choose current consent")}</option>
+        {rows.map((row) => (
+          <option key={row.id} value={row.id}>
+            {t("Granted")} · {String(row.template_version)} ·{" "}
+            {new Date(String(row.created_at)).toLocaleDateString()}
+          </option>
+        ))}
+      </select>
+      {error && <span role="alert">{error}</span>}
+    </label>
   );
 }

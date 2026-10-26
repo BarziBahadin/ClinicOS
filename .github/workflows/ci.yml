@@ -26,15 +26,16 @@ jobs:
             sleep 2
           done
           exit 1
-      - name: Wait for scanner
+      - name: Wait for private media services
         run: |
           for attempt in $(seq 1 40); do
-            if [ "$(docker inspect --format '{{.State.Health.Status}}' clinicos-scanner)" = healthy ]; then exit 0; fi
+            if [ "$(docker inspect --format '{{.State.Health.Status}}' clinicos-scanner)" = healthy ] && [ "$(docker inspect --format '{{.State.Health.Status}}' clinicos-media-processor)" = healthy ]; then exit 0; fi
             sleep 3
           done
           exit 1
       - run: npm run check
       - run: npm run functions:check
+      - run: npm run functions:test
       - run: npm run db:migrations:check
       - run: npm run db:test -- --media
       - run: npm run db:advisors

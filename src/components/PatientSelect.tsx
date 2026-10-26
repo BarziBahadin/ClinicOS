@@ -18,7 +18,12 @@ export function PatientSelect({ field, t }: { field: Field; t: T }) {
     let cancelled = false;
     const timer = setTimeout(() => {
       void client()
-        .rpc("patient_search", { search_term: query, page_size: 50 })
+        .rpc(
+          field.type === "billing-patient"
+            ? "billing_patient_search"
+            : "patient_search",
+          { search_term: query, page_size: 50 },
+        )
         .then(({ data, error }) => {
           if (cancelled) return;
           if (error) {
@@ -44,7 +49,7 @@ export function PatientSelect({ field, t }: { field: Field; t: T }) {
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [query]);
+  }, [query, field.type]);
   return (
     <div className="patient-select">
       <input

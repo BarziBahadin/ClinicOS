@@ -1,7 +1,13 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { client } from "../lib/supabase";
 import type { Row } from "../domain/types";
-import { DataTable, Empty, ErrorMessage, type T } from "../components/ui";
+import {
+  DataTable,
+  Empty,
+  ErrorMessage,
+  Loading,
+  type T,
+} from "../components/ui";
 import { day } from "../lib/format";
 export function AppointmentsPage({
   t,
@@ -14,13 +20,16 @@ export function AppointmentsPage({
 }) {
   const [date, setDate] = useState(() => day(new Date().toISOString())),
     [rows, setRows] = useState<Row[]>([]),
+    [loading, setLoading] = useState(true),
     [error, setError] = useState("");
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
     void client()
       .rpc("appointments_for_day", { service_day: date })
       .then(({ data, error }) => {
         if (cancelled) return;
+        setLoading(false);
         if (error) {
           setError(error.message);
           return;
@@ -43,13 +52,19 @@ export function AppointmentsPage({
             required
             value={date}
             onChange={(e) => {
-              if (e.target.value) setDate(e.target.value);
+              if (e.target.value) {
+                setLoading(true);
+                setRows([]);
+                setDate(e.target.value);
+              }
             }}
           />
         </label>
       </div>
       {error && <ErrorMessage error={error} />}{" "}
-      {rows.length ? (
+      {loading ? (
+        <Loading t={t} />
+      ) : rows.length ? (
         <DataTable
           heads={[
             "Time",

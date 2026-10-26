@@ -1,11 +1,18 @@
+import { phoneReminderChecks } from "./phone-reminder-tests";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import pg from "pg";
 import { recoveryCheck } from "./recovery-check";
 import { antivirusPdf } from "./test-fixtures";
 import { TOTP } from "otpauth";
+import { usernameIdentity } from "../supabase/functions/_shared/username";
+import {
+  workflowChecks,
+  accountingChecks,
+  accessChecks,
+} from "./workflow-tests";
 const status = JSON.parse(
   execFileSync("npx", ["supabase", "status", "--output", "json"], {
     encoding: "utf8",
@@ -34,7 +41,7 @@ async function command(
   role: string,
   kind: string,
   payload: Record<string, unknown>,
-  id = randomUUID(),
+  id: string = randomUUID(),
 ) {
   return clients[role].rpc("command", { kind, payload, request_id: id });
 }
@@ -51,7 +58,13 @@ try {
     "insert into clinic.branches(id,organization_id,name) values($1,$2,'Test branch')",
     [branch, org],
   );
-  for (const role of ["owner", "doctor", "receptionist", "accountant"]) {
+  for (const role of [
+    "owner",
+    "doctor",
+    "receptionist",
+    "accountant",
+    "administrator",
+  ]) {
     const email = `test-${role}-${org}@clinicos.test`,
       password = `Test-${randomUUID()}!`;
     const { data, error } = await admin.auth.admin.createUser({
@@ -70,6 +83,148 @@ try {
     });
     success(await c.auth.signInWithPassword({ email, password }));
     clients[role] = c;
+  }
+  if (process.argv.includes("--media")) {
+    await test("Administrators create username accounts; temporary passwords, resets and privilege boundaries are enforced", async () => {
+      const username = `staff-${org.slice(0, 8)}`;
+      const initial = `Temporary-${randomUUID()}!`,
+        personal = `Personal-${randomUUID()}!`,
+        reset = `Reset-${randomUUID()}!`;
+      const payload = {
+        action: "create",
+        username,
+        display_name: "Synthetic front desk",
+        role: "receptionist",
+        password: initial,
+        request_id: randomUUID(),
+      };
+      const created = success(
+        await clients.administrator.functions.invoke("staff-admin", {
+          body: payload,
+        }),
+      );
+      ids.push(created.data.id);
+      const retry = success(
+        await clients.administrator.functions.invoke("staff-admin", {
+          body: payload,
+        }),
+      );
+      assert.equal(retry.data.id, created.data.id);
+      const staff = createClient(status.API_URL, status.PUBLISHABLE_KEY, {
+        auth: { persistSession: false, autoRefreshToken: false },
+      });
+      success(
+        await staff.auth.signInWithPassword({
+          email: usernameIdentity(username),
+          password: initial,
+        }),
+      );
+      assert.equal(
+        success(await staff.rpc("account_status")).data
+          .password_change_required,
+        true,
+      );
+      assert.ok(
+        (
+          await staff.rpc("command", {
+            kind: "patient.create",
+            payload: { full_name: "Denied temporary password" },
+            request_id: randomUUID(),
+          })
+        ).error,
+      );
+      success(
+        await staff.functions.invoke("staff-admin", {
+          body: {
+            action: "change_password",
+            current_password: initial,
+            password: personal,
+          },
+        }),
+      );
+      assert.equal(
+        success(await staff.rpc("authorize", { permission: "patients" })).data,
+        false,
+      );
+      success(
+        await staff.auth.signInWithPassword({
+          email: usernameIdentity(username),
+          password: personal,
+        }),
+      );
+      assert.equal(
+        success(await staff.rpc("account_status")).data
+          .password_change_required,
+        false,
+      );
+      assert.equal(
+        success(await staff.rpc("authorize", { permission: "patients" })).data,
+        true,
+      );
+      assert.ok(
+        (
+          await clients.receptionist.functions.invoke("staff-admin", {
+            body: { ...payload, username: `denied-${org.slice(0, 8)}` },
+          })
+        ).error,
+      );
+      assert.ok(
+        (
+          await command("administrator", "member.update", {
+            user_id: created.data.id,
+            role: "owner",
+            active: true,
+          })
+        ).error,
+      );
+      const ownerId = success(await clients.owner.auth.getUser()).data.user!.id;
+      assert.ok(
+        (
+          await clients.administrator.functions.invoke("staff-admin", {
+            body: {
+              action: "reset_password",
+              user_id: ownerId,
+              password: reset,
+            },
+          })
+        ).error,
+      );
+      success(
+        await clients.administrator.functions.invoke("staff-admin", {
+          body: {
+            action: "reset_password",
+            user_id: created.data.id,
+            password: reset,
+          },
+        }),
+      );
+      assert.equal(
+        success(await staff.rpc("authorize", { permission: "patients" })).data,
+        false,
+      );
+      assert.ok((await staff.rpc("account_status")).error);
+      success(
+        await staff.auth.signInWithPassword({
+          email: usernameIdentity(username),
+          password: reset,
+        }),
+      );
+      assert.equal(
+        success(await staff.rpc("account_status")).data
+          .password_change_required,
+        true,
+      );
+      success(
+        await staff.functions.invoke("staff-admin", {
+          body: {
+            action: "change_password",
+            current_password: reset,
+            password: personal,
+          },
+        }),
+      );
+      await staff.auth.signOut({ scope: "local" });
+    });
   }
   await test("Public signup is blocked while invited individual staff can sign in", async () => {
     const c = createClient(status.API_URL, status.PUBLISHABLE_KEY, {
@@ -101,7 +256,20 @@ try {
         type: "recovery",
       }),
     );
-    success(await c.auth.updateUser({ password: `New-${randomUUID()}!` }));
+    const replacementPassword = `New-${randomUUID()}!`;
+    success(await c.auth.updateUser({ password: replacementPassword }));
+    assert.equal(
+      success(
+        await clients.accountant.rpc("authorize", { permission: "finance" }),
+      ).data,
+      false,
+    );
+    success(
+      await clients.accountant.auth.signInWithPassword({
+        email: user!.email!,
+        password: replacementPassword,
+      }),
+    );
     const second = createClient(status.API_URL, status.PUBLISHABLE_KEY, {
       auth: { persistSession: false },
     });
@@ -910,6 +1078,79 @@ try {
       ),
     );
   });
+  await workflowChecks({
+    db,
+    org,
+    other,
+    clients,
+    ids,
+    admin,
+    patientId,
+    encounterId,
+    serviceId,
+    test,
+    command,
+  });
+  await phoneReminderChecks({
+    db,
+    org,
+    other,
+    clients,
+    ids,
+    admin,
+    patientId,
+    encounterId,
+    serviceId,
+    test,
+    command,
+  });
+  await accountingChecks({
+    db,
+    org,
+    other,
+    clients,
+    ids,
+    admin,
+    patientId,
+    encounterId,
+    serviceId,
+    test,
+    command,
+  });
+  await test("Anonymous API execution and authenticated server-only operations are explicitly revoked", async () => {
+    const anonymous = await db.query(
+      "select p.oid::regprocedure signature from pg_proc p join pg_namespace n on n.oid=p.pronamespace where n.nspname in ('clinic','public') and p.prokind='f' and has_function_privilege('anon',p.oid,'execute') and not exists(select 1 from pg_depend d where d.classid='pg_proc'::regclass and d.objid=p.oid and d.deptype='e')",
+    );
+    assert.deepEqual(anonymous.rows, []);
+    for (const signature of [
+      "public.media_finalize(uuid,boolean)",
+      "public.provision_member(uuid,uuid,text,text)",
+      "public.media_complete(uuid,text,text,text)",
+      "public.media_cleanup_record(uuid,text)",
+    ])
+      assert.equal(
+        (
+          await db.query(
+            "select has_function_privilege('authenticated',$1::regprocedure,'execute') allowed",
+            [signature],
+          )
+        ).rows[0].allowed,
+        false,
+      );
+  });
+  await accessChecks({
+    db,
+    org,
+    other,
+    clients,
+    ids,
+    admin,
+    patientId,
+    encounterId,
+    serviceId,
+    test,
+    command,
+  });
   if (process.argv.includes("--media")) {
     await test("Private media requires consent, scans clean uploads and authorizes temporary access", async () => {
       const consent = success(
@@ -924,7 +1165,7 @@ try {
       const file = new File(
         [
           Buffer.from(
-            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9VsAAAAASUVORK5CYII=",
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAEUlEQVQImWPoKE/rKE9jgFAAJ6IFla15zswAAAAASUVORK5CYII=",
             "base64",
           ),
         ],
@@ -954,7 +1195,74 @@ try {
       assert.match(read.data.url, /^http:\/\/127\.0\.0\.1:54321\/storage/);
       const response = await fetch(read.data.url);
       assert.equal(response.status, 200);
-      assert.equal((await response.arrayBuffer()).byteLength, file.size);
+      const originalBytes = Buffer.from(await response.arrayBuffer());
+      assert.deepEqual(originalBytes, Buffer.from(await file.arrayBuffer()));
+      const preview = success(
+        await clients.doctor.functions.invoke("clinical-media", {
+          body: { action: "preview", media_id: upload.data.id },
+        }),
+      );
+      const previewResponse = await fetch(preview.data.url);
+      assert.equal(previewResponse.status, 200);
+      const previewBytes = Buffer.from(await previewResponse.arrayBuffer());
+      assert.equal(previewBytes.subarray(1, 4).toString(), "PNG");
+      const metadata = (
+        await db.query(
+          "select preview_key,preview_sha256,processing_note from clinic.media where id=$1",
+          [upload.data.id],
+        )
+      ).rows[0];
+      assert.ok(metadata.preview_key);
+      assert.equal(
+        metadata.preview_sha256,
+        createHash("sha256").update(previewBytes).digest("hex"),
+      );
+      assert.match(metadata.processing_note, /Original bytes preserved/);
+      assert.ok(
+        (
+          await clients.receptionist.functions.invoke("clinical-media", {
+            body: { action: "preview", media_id: upload.data.id },
+          })
+        ).error,
+      );
+      const malformed = new FormData();
+      const malformedId = randomUUID();
+      for (const [key, value] of Object.entries({
+        upload_id: malformedId,
+        patient_id: patientId,
+        consent_id: consent.data.id,
+        title: "Malformed synthetic PNG",
+        body_site: "Test site",
+      }))
+        malformed.set(key, value);
+      malformed.set(
+        "file",
+        new File(
+          [
+            Buffer.from(
+              "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a9VsAAAAASUVORK5CYII=",
+              "base64",
+            ),
+          ],
+          "malformed.png",
+          { type: "image/png" },
+        ),
+      );
+      assert.ok(
+        (
+          await clients.doctor.functions.invoke("clinical-media", {
+            body: malformed,
+          })
+        ).error,
+      );
+      assert.equal(
+        (
+          await db.query("select status from clinic.media where id=$1", [
+            malformedId,
+          ])
+        ).rows[0].status,
+        "rejected",
+      );
       assert.ok(
         (
           await clients.receptionist.functions.invoke("clinical-media", {
@@ -1001,6 +1309,124 @@ try {
         (await admin.storage.from("clinical").download(rejected.object_key))
           .error,
       );
+
+      await test("Maintenance expires abandoned uploads without erasing ready media or upload evidence", async () => {
+        assert.ok(
+          (
+            await clients.owner.rpc("media_maintenance", {
+              expire_abandoned: true,
+            })
+          ).error,
+        );
+        assert.ok(
+          (
+            await clients.doctor.rpc("media_cleanup_record", {
+              media_id: upload.data.id,
+              object_key: "forbidden",
+            })
+          ).error,
+        );
+        const staleId = randomUUID();
+        const staleHash = createHash("sha256")
+          .update("abandoned synthetic")
+          .digest("hex");
+        success(
+          await clients.doctor.rpc("media_prepare", {
+            media_id: staleId,
+            patient_id: patientId,
+            consent_id: consent.data.id,
+            title: "Abandoned synthetic upload",
+            body_site: "Test site",
+            mime_type: "image/png",
+            content_hash: staleHash,
+          }),
+        );
+        await db.query(
+          "update clinic.media set created_at=now()-interval '8 days' where id=$1",
+          [staleId],
+        );
+        const maintenance = success(
+          await admin.rpc("media_maintenance", { expire_abandoned: true }),
+        ).data;
+        assert.ok(maintenance.expired >= 1);
+        assert.equal(
+          (
+            await db.query("select status from clinic.media where id=$1", [
+              staleId,
+            ])
+          ).rows[0].status,
+          "rejected",
+        );
+        assert.equal(
+          (
+            await db.query("select status from clinic.media where id=$1", [
+              upload.data.id,
+            ])
+          ).rows[0].status,
+          "ready",
+        );
+        assert.ok(
+          (
+            await admin.rpc("media_cleanup_record", {
+              media_id: upload.data.id,
+              object_key: (
+                await db.query(
+                  "select object_key from clinic.media where id=$1",
+                  [upload.data.id],
+                )
+              ).rows[0].object_key,
+            })
+          ).error,
+        );
+        const key = (
+          await db.query("select object_key from clinic.media where id=$1", [
+            staleId,
+          ])
+        ).rows[0].object_key;
+        success(
+          await admin.storage
+            .from("clinical")
+            .upload(key, Buffer.from("failed synthetic bytes"), {
+              contentType: "image/png",
+            }),
+        );
+        await db.query(
+          "update clinic.media set rejected_at=now()-interval '31 days' where id=$1",
+          [staleId],
+        );
+        const candidates = success(await admin.rpc("media_maintenance")).data
+          .objects;
+        assert.ok(
+          candidates.some(
+            (r: any) => r.media_id === staleId && r.object_key === key,
+          ),
+        );
+        assert.ok(!candidates.some((r: any) => r.media_id === upload.data.id));
+        success(await admin.storage.from("clinical").remove([key]));
+        success(
+          await admin.rpc("media_cleanup_record", {
+            media_id: staleId,
+            object_key: key,
+          }),
+        );
+        assert.equal(
+          (
+            await db.query(
+              "select count(*) from clinic.media_cleanup_events where media_id=$1",
+              [staleId],
+            )
+          ).rows[0].count,
+          "1",
+        );
+        assert.equal(
+          (
+            await db.query("select count(*) from clinic.media where id=$1", [
+              staleId,
+            ])
+          ).rows[0].count,
+          "1",
+        );
+      });
       success(
         await command("doctor", "consent.record", {
           patient_id: patientId,
@@ -1081,13 +1507,17 @@ try {
   console.log(`\n${passed} database/API integration checks passed.`);
 } finally {
   const { rows: objects } = await db.query(
-    "select object_key from clinic.media where organization_id=$1",
+    "select object_key,preview_key from clinic.media where organization_id=$1",
     [org],
   );
   if (objects.length)
     await admin.storage
       .from("clinical")
-      .remove(objects.map((r) => r.object_key));
+      .remove(
+        objects
+          .flatMap((r) => [r.object_key, r.preview_key])
+          .filter((key): key is string => typeof key === "string"),
+      );
   await db.query("begin");
   try {
     await db.query("set local session_replication_role='replica'");

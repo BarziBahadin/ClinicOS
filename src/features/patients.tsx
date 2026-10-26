@@ -17,7 +17,7 @@ export function PatientDirectory({
     [cursors, setCursors] = useState<(string | null)[]>([null]),
     [items, setItems] = useState<Patient[]>([]),
     [more, setMore] = useState(false),
-    [loading, setLoading] = useState(false),
+    [loading, setLoading] = useState(true),
     [error, setError] = useState("");
   const cursor = cursors.at(-1);
   useEffect(() => {
@@ -64,7 +64,7 @@ export function PatientDirectory({
           />
         </label>
         <span className="muted">
-          {loading ? "…" : `${items.length} ${t("Patients")}`}
+          {loading ? t("Loading…") : `${items.length} ${t("Patients")}`}
         </span>
       </div>
       <p className="panel-hint">

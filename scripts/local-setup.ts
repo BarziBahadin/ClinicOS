@@ -26,7 +26,7 @@ const roles = [
 mkdirSync(".local", { recursive: true });
 const accounts: Record<
   string,
-  { email: string; password: string; id: string }
+  { username?: string; email: string; password: string; id: string }
 > = existsSync(".local/accounts.json")
   ? JSON.parse(readFileSync(".local/accounts.json", "utf8"))
   : {};
@@ -49,7 +49,7 @@ for (const role of roles) {
     if (error) throw error;
     user = data.user;
   }
-  accounts[role] = { email, password, id: user.id };
+  accounts[role] = { username: role, email, password, id: user.id };
 }
 writeFileSync(
   ".local/accounts.json",
@@ -70,7 +70,7 @@ try {
   );
   for (const role of roles)
     await db.query(
-      "insert into clinic.memberships(organization_id,user_id,display_name,role) values($1,$2,$3,$4) on conflict(organization_id,user_id) do nothing",
+      "insert into clinic.memberships(organization_id,user_id,display_name,role,username) values($1,$2,$3,$4,$4) on conflict(organization_id,user_id) do update set username=coalesce(clinic.memberships.username,excluded.username)",
       [org, accounts[role].id, `Development ${role}`, role],
     );
   const {
