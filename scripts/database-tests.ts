@@ -84,6 +84,55 @@ try {
     success(await c.auth.signInWithPassword({ email, password }));
     clients[role] = c;
   }
+  await test("Clinic document contact details require settings permission and remain organization scoped", async () => {
+    const payload = {
+      name: "Integration test clinic",
+      require_mfa: false,
+      document_address: "Synthetic address",
+      document_phone: "+964 750 000 0000",
+    };
+    for (const role of [
+      "doctor",
+      "receptionist",
+      "accountant",
+      "administrator",
+    ])
+      assert.ok((await command(role, "settings.update", payload)).error);
+    const request = randomUUID();
+    success(await command("owner", "settings.update", payload, request));
+    success(await command("owner", "settings.update", payload, request));
+    const profile = success(await clients.doctor.rpc("workspace")).data
+      .organization;
+    assert.equal(profile.document_address, payload.document_address);
+    assert.equal(profile.document_phone, payload.document_phone);
+    const isolated = (
+      await db.query(
+        "select document_address,document_phone from clinic.organizations where id=$1",
+        [other],
+      )
+    ).rows[0];
+    assert.equal(isolated.document_address, "");
+    assert.equal(isolated.document_phone, "");
+    assert.ok(
+      (
+        await command("owner", "settings.update", {
+          ...payload,
+          document_phone: "x".repeat(81),
+        })
+      ).error,
+    );
+    success(
+      await command("owner", "settings.update", {
+        name: payload.name,
+        require_mfa: false,
+      }),
+    );
+    assert.equal(
+      success(await clients.owner.rpc("workspace")).data.organization
+        .document_phone,
+      payload.document_phone,
+    );
+  });
   if (process.argv.includes("--media")) {
     await test("Administrators create username accounts; temporary passwords, resets and privilege boundaries are enforced", async () => {
       const username = `staff-${org.slice(0, 8)}`;
@@ -1188,6 +1237,106 @@ try {
       if (upload.error)
         throw new Error(JSON.stringify(await upload.error.context.json()));
       assert.ok(upload.data.id, JSON.stringify(upload.data));
+      await test("Patient report pages filter PDFs before pagination and preserve media authorization", async () => {
+        const reportIds: string[] = [];
+        for (const title of [
+          "Synthetic blood test",
+          "Synthetic biopsy report",
+        ]) {
+          const reportId = randomUUID();
+          const report = new FormData();
+          for (const [key, value] of Object.entries({
+            upload_id: reportId,
+            patient_id: patientId,
+            consent_id: consent.data.id,
+            title,
+            body_site: "Not recorded",
+          }))
+            report.set(key, value);
+          // A complete, blank one-page PDF, with byte offsets calculated for its xref.
+          const objects = [
+            "<</Type /Catalog /Pages 2 0 R>>",
+            "<</Type /Pages /Kids [3 0 R] /Count 1>>",
+            "<</Type /Page /Parent 2 0 R /MediaBox [0 0 100 100]>>",
+          ];
+          let pdf = "%PDF-1.4\n";
+          const offsets = objects.map((object, index) => {
+            const offset = pdf.length;
+            pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+            return offset;
+          });
+          const xref = pdf.length;
+          pdf +=
+            "xref\n0 4\n0000000000 65535 f \n" +
+            offsets
+              .map((offset) => `${String(offset).padStart(10, "0")} 00000 n \n`)
+              .join("");
+          pdf += `trailer\n<</Size 4 /Root 1 0 R>>\nstartxref\n${xref}\n%%EOF\n`;
+          report.set(
+            "file",
+            new File([pdf], "synthetic-scan.pdf", { type: "application/pdf" }),
+          );
+          success(
+            await clients.doctor.functions.invoke("clinical-media", {
+              body: report,
+            }),
+          );
+          reportIds.push(reportId);
+        }
+        const args = {
+          record_type: "media_documents",
+          patient_id: patientId,
+          page_size: 1,
+        };
+        const first = success(
+          await clients.doctor.rpc("history_page", args),
+        ).data;
+        assert.equal(first.items.length, 1);
+        assert.equal(first.has_more, true);
+        assert.equal(first.items[0].mime_type, "application/pdf");
+        const second = success(
+          await clients.doctor.rpc("history_page", {
+            ...args,
+            cursor_id: first.items[0].id,
+          }),
+        ).data;
+        assert.equal(second.items.length, 1);
+        assert.equal(second.has_more, false);
+        assert.deepEqual(
+          new Set([first.items[0].id, second.items[0].id]),
+          new Set(reportIds),
+        );
+        const search = success(
+          await clients.doctor.rpc("history_page", {
+            ...args,
+            search_term: "biopsy",
+          }),
+        ).data;
+        assert.equal(search.items[0].title, "Synthetic biopsy report");
+        const empty = success(
+          await clients.doctor.rpc("history_page", {
+            ...args,
+            search_term: "Synthetic image",
+          }),
+        ).data;
+        assert.deepEqual(empty.items, []);
+        for (const role of [
+          "owner",
+          "receptionist",
+          "administrator",
+          "accountant",
+        ]) {
+          assert.ok((await clients[role].rpc("history_page", args)).error);
+        }
+        const access = success(
+          await clients.doctor.functions.invoke("clinical-media", {
+            body: { action: "read", media_id: reportIds[0] },
+          }),
+        );
+        const response = await fetch(access.data.url);
+        assert.equal(response.status, 200);
+        assert.ok((await response.text()).startsWith("%PDF-1.4"));
+      });
       const read = await clients.doctor.functions.invoke("clinical-media", {
         body: { action: "read", media_id: upload.data.id },
       });

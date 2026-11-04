@@ -155,11 +155,13 @@ export function Dialog({
   children,
   onClose,
   busy = false,
+  className,
 }: {
   title: string;
   children: ReactNode;
   onClose: () => void;
   busy?: boolean;
+  className?: string;
 }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -169,6 +171,7 @@ export function Dialog({
   return (
     <dialog
       ref={ref}
+      className={className}
       aria-labelledby="dialog-title"
       onCancel={(e) => {
         e.preventDefault();

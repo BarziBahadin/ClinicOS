@@ -18,6 +18,7 @@ export type RecordType =
   | "tasks"
   | "results"
   | "media"
+  | "media_documents"
   | "consents"
   | "cash_movements"
   | "tills"
@@ -37,6 +38,7 @@ export function useRecordPage(
   type: RecordType,
   refreshKey: unknown,
   patientId?: string,
+  pageSize = 50,
 ) {
   const [query, setQuery] = useState(""),
     [cursors, setCursors] = useState<(string | null)[]>([null]),
@@ -87,7 +89,7 @@ export function useRecordPage(
             record_type: accounting ? type.split(":")[1] : type,
             search_term: query,
             cursor_id: cursor,
-            ...(!accounting ? { page_size: 50 } : {}),
+            ...(!accounting ? { page_size: pageSize } : {}),
             ...(!financial && !accounting
               ? { patient_id: patientId ?? null }
               : {}),
@@ -111,7 +113,7 @@ export function useRecordPage(
       cancelled = true;
       clearTimeout(timer);
     };
-  }, [type, query, cursor, refreshKey, patientId]);
+  }, [type, query, cursor, refreshKey, patientId, pageSize]);
   return {
     items,
     more,

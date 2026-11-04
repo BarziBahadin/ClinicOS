@@ -38,13 +38,17 @@ describe("Patient form integrity", () => {
       />,
     );
     await user.type(screen.getByLabelText("Full name *"), "Test patient");
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(
+      screen.getByRole("button", { name: /^Register patient$/ }),
+    );
     await screen.findByRole("alert");
     expect(
       (screen.getByLabelText("Full name *") as HTMLInputElement).value,
     ).toBe("Test patient");
     expect(onClose).not.toHaveBeenCalled();
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(
+      screen.getByRole("button", { name: /^Register patient$/ }),
+    );
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
     expect(vi.mocked(execute).mock.calls[0][2]).toBe(
       vi.mocked(execute).mock.calls[1][2],
@@ -64,7 +68,9 @@ describe("Patient form integrity", () => {
     );
     await user.type(screen.getByLabelText("Full name *"), "Test patient");
     await user.type(screen.getByLabelText("Phone number"), "123");
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(
+      screen.getByRole("button", { name: /^Register patient$/ }),
+    );
     expect((await screen.findByRole("alert")).textContent).toContain(
       "valid Iraqi",
     );
@@ -109,7 +115,9 @@ describe("Patient form integrity", () => {
       />,
     );
     await user.type(screen.getByLabelText("Full name *"), "Previous patient");
-    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+    await user.click(
+      screen.getByRole("button", { name: /^Register patient$/ }),
+    );
     await waitFor(() => expect(execute).toHaveBeenCalledOnce());
     view.unmount();
     await act(async () => {

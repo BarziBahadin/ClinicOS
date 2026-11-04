@@ -770,11 +770,22 @@ export function App() {
                 {selected.patient_number}
               </bdi>
               <h2 dir="auto">{selected.full_name}</h2>
-              <p>
-                {t("Age")}:{" "}
-                {ageAt(selected.birth_date, selected.birth_precision)} ·{" "}
-                <bdi dir="ltr">{selected.phone ?? t("No phone recorded")}</bdi>
-              </p>
+              <dl className="profile-details">
+                <div>
+                  <dt>{t("Age")}</dt>
+                  <dd>
+                    {ageAt(selected.birth_date, selected.birth_precision)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>{t("Phone number")}</dt>
+                  <dd>
+                    <bdi dir="ltr">
+                      {selected.phone ?? t("No phone recorded")}
+                    </bdi>
+                  </dd>
+                </div>
+              </dl>
             </div>
           </div>
           <button
@@ -853,13 +864,16 @@ export function App() {
             {[
               ...(can("clinical")
                 ? [
-                    { id: "records", label: "Clinical records" },
-                    { id: "history", label: "Clinical history" },
-                    { id: "documents", label: "Documents & consent" },
+                    { id: "records", label: "Visits & treatment" },
+                    { id: "history", label: "Medical history" },
+                    { id: "documents", label: "Consent & care documents" },
                   ]
                 : []),
               ...(can("media")
-                ? [{ id: "media", label: "Clinical media" }]
+                ? [
+                    { id: "reports", label: "Lab reports & documents" },
+                    { id: "media", label: "Clinical media" },
+                  ]
                 : []),
               { id: "contacts", label: "Contacts" },
               { id: "access", label: "Care team & access" },
@@ -882,7 +896,7 @@ export function App() {
         {can("clinical") && patientSection === "records" && (
           <section className="panel">
             <div className="panel-head">
-              <h2>{t("Clinical records")}</h2>
+              <h2>{t("Visits & treatment")}</h2>
               <span>{record?.encounters.length ?? "—"}</span>
             </div>
             {recordError ? (
@@ -998,9 +1012,10 @@ export function App() {
             )}
           </section>
         )}
-        {can("media") && patientSection === "media" && (
+        {can("media") && ["media", "reports"].includes(patientSection) && (
           <MediaPanel
-            key={`media-${session.user.id}-${selected.id}`}
+            key={`media-${session.user.id}-${selected.id}-${patientSection}`}
+            documentsOnly={patientSection === "reports"}
             sessionKey={session.access_token}
             data={data}
             t={t}
@@ -1517,6 +1532,18 @@ export function App() {
                   kind: "settings.update",
                   fields: [
                     text("name", "Clinic name", true, data.organization.name),
+                    text(
+                      "document_address",
+                      "Clinic address",
+                      false,
+                      data.organization.document_address,
+                    ),
+                    text(
+                      "document_phone",
+                      "Clinic phone",
+                      false,
+                      data.organization.document_phone,
+                    ),
                     {
                       name: "require_mfa",
                       label: "Require MFA",
@@ -1903,7 +1930,6 @@ function Login({
                     type={passwordVisible ? "text" : "password"}
                     autoComplete="current-password"
                     required
-                    minLength={10}
                     dir="ltr"
                   />
                   <button

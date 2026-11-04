@@ -12,6 +12,7 @@ import {
 import { money } from "../domain/money";
 import { formatDate, str } from "../lib/format";
 import { PerformedCharges, PackageActions } from "./workflows";
+import { printDocument } from "../lib/print";
 import { FinancialReports } from "./financial-reports";
 import {
   patient,
@@ -190,14 +191,7 @@ export function Billing({
                       )}
                       <button
                         className="text-button"
-                        onClick={() =>
-                          printInvoice(
-                            inv,
-                            t,
-                            locale,
-                            String(data.organization.name),
-                          )
-                        }
+                        onClick={() => printInvoice(inv, t, locale, data)}
                       >
                         {t("Print")}
                       </button>
@@ -256,14 +250,7 @@ export function Billing({
                   <td>
                     <button
                       className="text-button"
-                      onClick={() =>
-                        printReceipt(
-                          p,
-                          t,
-                          locale,
-                          String(data.organization.name),
-                        )
-                      }
+                      onClick={() => printReceipt(p, t, locale, data)}
                     >
                       {t("Receipt")}
                     </button>
@@ -376,68 +363,135 @@ export function Billing({
     </>
   );
 }
-function printRows(heading: string, rows: string[], locale: Locale) {
-  document.getElementById("clinicos-print")?.remove();
-  const section = document.createElement("section");
-  section.id = "clinicos-print";
-  section.dir = locale === "ckb" ? "rtl" : "ltr";
-  section.lang = locale;
-  const title = document.createElement("h1");
-  title.textContent = heading;
-  section.append(title);
-  for (const text of rows) {
-    const p = document.createElement("p");
-    p.textContent = text;
-    section.append(p);
-  }
-  document.body.append(section);
-  const cleanup = () => {
-    section.remove();
-    window.removeEventListener("afterprint", cleanup);
-  };
-  window.addEventListener("afterprint", cleanup);
-  window.print();
-}
-function printInvoice(inv: Row, t: T, locale: Locale, clinic: string) {
-  printRows(
-    `${clinic} · ${inv.invoice_number}`,
-    [
-      String(
-        (inv.patient_snapshot as Record<string, unknown>)?.full_name ?? "",
-      ),
-      formatDate(inv.created_at, true, locale),
-      ...(inv.lines as Row[]).map(
-        (line) =>
-          `${line.description} × ${line.quantity} — ${money(line.amount, inv.currency as Currency, locale)}`,
-      ),
-      `${t("Total")}: ${money(inv.total, inv.currency as Currency, locale)}`,
+export function printInvoice(inv: Row, t: T, locale: Locale, data: Snapshot) {
+  const identity = inv.patient_snapshot as Row | undefined;
+  printDocument(t("Invoice"), [], locale, {
+    clinic: data.organization,
+    metadata: [
+      [t("Invoice number"), String(inv.invoice_number)],
+      [t("Date"), formatDate(inv.created_at, true, locale)],
+      [t("Patient"), String(identity?.full_name ?? "—")],
+      [t("Patient number"), String(identity?.patient_number ?? "—")],
+      [t("Currency"), String(inv.currency)],
+      [
+        t("Issued by"),
+        data.members.find((m) => m.user_id === inv.created_by)?.display_name ??
+          "—",
+      ],
     ],
-    locale,
-  );
-}
-function printReceipt(p: Row, t: T, locale: Locale, clinic: string) {
-  const snapshot = p.patient_snapshot as Record<string, unknown>;
-  printRows(
-    `${clinic} · ${t("Receipt")}`,
-    [
-      String(p.id),
-      String(snapshot?.full_name ?? ""),
-      String(snapshot?.patient_number ?? ""),
-      formatDate(p.created_at, true, locale),
-      `${t("Category")}: ${p.kind}`,
-      `${t("Payment method")}: ${t(String(p.method).charAt(0).toUpperCase() + String(p.method).slice(1))}`,
-      `${t("Amount received")}: ${money(p.amount, p.currency as Currency, locale)}`,
-      ...(p.invoice_number
+    table: {
+      columns: [
+        { label: t("Description") },
+        { label: t("Quantity"), numeric: true },
+        { label: t("Unit price"), numeric: true },
+        { label: t("Amount"), numeric: true },
+      ],
+      rows: (inv.lines as Row[]).map((line) => [
+        String(line.description),
+        String(line.quantity),
+        money(line.unit_price, inv.currency as Currency, locale),
+        money(line.amount, inv.currency as Currency, locale),
+      ]),
+    },
+    totals: [
+      [t("Total"), money(inv.total, inv.currency as Currency, locale)],
+      ...(inv.balance != null
         ? [
-            `${t("Invoice number")}: ${p.invoice_number}`,
-            `${t("Applied to invoice")}: ${money(p.invoice_amount ?? p.amount, p.invoice_currency as Currency, locale)}`,
+            [
+              t("Balance"),
+              money(inv.balance, inv.currency as Currency, locale),
+            ] as [string, string],
           ]
         : []),
-      ...(p.exchange_rate ? [`${t("IQD per USD")}: ${p.exchange_rate}`] : []),
-      ...(p.original_payment_id
-        ? [String(p.original_payment_id), String(p.reason ?? "")]
-        : []),
     ],
+    note: t(
+      "Balance reflects payments, refunds and credits at the time of printing.",
+    ),
+  });
+}
+export function printReceipt(p: Row, t: T, locale: Locale, data: Snapshot) {
+  const identity = p.patient_snapshot as Row | undefined;
+  printDocument(
+    t(p.kind === "refund" ? "Refund receipt" : "Receipt"),
+    [],
     locale,
+    {
+      clinic: data.organization,
+      metadata: [
+        [t("Reference"), String(p.id)],
+        [t("Date"), formatDate(p.created_at, true, locale)],
+        [t("Patient"), String(identity?.full_name ?? "—")],
+        [t("Patient number"), String(identity?.patient_number ?? "—")],
+        [
+          t("Category"),
+          t(
+            (
+              {
+                payment: "Payment",
+                deposit: "Deposit",
+                deposit_application: "Applied deposit",
+                refund: "Refund",
+              } as Record<string, string>
+            )[String(p.kind)] ?? String(p.kind),
+          ),
+        ],
+        [
+          t("Payment method"),
+          t(
+            String(p.method).charAt(0).toUpperCase() +
+              String(p.method).slice(1),
+          ),
+        ],
+        [
+          t("Issued by"),
+          data.members.find((m) => m.user_id === p.created_by)?.display_name ??
+            "—",
+        ],
+        ...(p.invoice_number
+          ? [
+              [t("Invoice number"), String(p.invoice_number)] as [
+                string,
+                string,
+              ],
+            ]
+          : []),
+        ...(p.original_payment_id
+          ? [
+              [t("Original payment"), String(p.original_payment_id)] as [
+                string,
+                string,
+              ],
+            ]
+          : []),
+        ...(p.exchange_rate
+          ? [[t("IQD per USD"), String(p.exchange_rate)] as [string, string]]
+          : []),
+      ],
+      totals: [
+        ...(p.invoice_number
+          ? [
+              [
+                t("Applied to invoice"),
+                money(
+                  p.invoice_amount ?? p.amount,
+                  p.invoice_currency as Currency,
+                  locale,
+                ),
+              ] as [string, string],
+            ]
+          : []),
+        [
+          t(
+            p.kind === "refund"
+              ? "Amount refunded"
+              : p.kind === "deposit_application"
+                ? "Applied deposit"
+                : "Amount received",
+          ),
+          money(p.amount, p.currency as Currency, locale),
+        ],
+      ],
+      note: p.reason ? `${t("Reason")}: ${p.reason}` : undefined,
+    },
   );
 }

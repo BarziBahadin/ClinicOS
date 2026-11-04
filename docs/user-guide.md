@@ -26,7 +26,7 @@ Business roles receive no automatic access to clinical records or photographs. T
 
 ## Reception: start and manage a visit
 
-Use the toolbar's sidebar button to show or hide navigation. Your account and sign-out remain in the toolbar. Within a patient profile, choose **Clinical records**, **Clinical history**, **Documents & consent**, **Clinical media**, **Contacts**, or **Care team & access** as available to your role. Billing and Finance also have section buttons above their records. In **Team & access**, expand **Manage account** beside a member to see your authorized actions.
+Use the toolbar's sidebar button to show or hide navigation. Your account and sign-out remain in the toolbar. Within a patient profile, choose **Visits & treatment**, **Medical history**, **Consent & care documents**, **Lab reports & documents**, **Clinical media**, **Contacts**, or **Care team & access** as available to your role. Billing and Finance also have section buttons above their records. In **Team & access**, expand **Manage account** beside a member to see your authorized actions.
 
 1. Open **Patients** and search by name, clinic number or phone. Shared family phone numbers are allowed. Confirm the patient's name and clinic number before opening a record.
 2. If needed, choose **New patient**. Enter the name as provided. A phone is optional. Select exact date, month/year, year only or unknown birth information; enter only what is known. Reported age is entered in years.
@@ -71,11 +71,13 @@ The application records the clinician's prescribing decisions; it does not choos
 ## Clinical photographs and documents
 
 1. Record current photography consent for the patient.
-2. Open **Clinical media → Upload document / photo**. Select the patient, current consent, title, body site and original file. Supported files are static JPEG, PNG, WebP and PDF, up to 10 MB.
-3. **Pending** means the upload has not completed safely. Retry with the same file and metadata, or cancel your pending upload with a reason. A **Rejected** upload is not available for viewing.
+2. Open **Clinical media → Upload document / photo**. In a patient record, choose the original file to upload immediately; there is no upload form. In the general media workspace, choose a patient first. The current photography consent is checked automatically, the filename becomes the title, and the body site is marked “Not recorded”. Supported files are static JPEG, PNG, WebP and PDF, up to 10 MB.
+3. **Pending** means the upload has not completed safely. Use **Retry upload** with the same original file, or cancel your pending upload with a reason. A **Rejected** upload is not available for viewing.
 4. Images must pass file validation, malware scanning and decoding. The viewer uses a resized PNG preview with metadata removed. **View original** opens the separately preserved original bytes. Old images can use **Generate preview**.
-5. Compare images only within the same patient's record. Switching patients clears the viewer and ignores earlier responses.
+5. Clinical media is a four-column gallery on desktop, with up to 16 files per page. Select a thumbnail to open the larger viewer. Use **Previous / Next** or the arrow keys to browse this patient's files on the current page; press Escape or **Close** to return. Switching patients clears the viewer and ignores earlier responses.
 6. Consent withdrawal prevents new authorized access. Do not distribute clinical files through personal accounts or general messaging tools.
+
+For lab tests and scanned PDFs, open the patient's **Lab reports & documents** section. Enter a clear **Report title**, then choose **Upload PDF report** and select the PDF saved on this computer (up to 10 MB). The existing clinical media consent and scanning checks apply. Search finds reports across all pages. Select a report and choose **Open PDF** to open it in the computer's PDF viewer. Scan paper documents to PDF with the scanner's software before uploading.
 
 **Export clinical record** requires clinical export permission, the correct care scope and a documented purpose. The JSON export contains clinical text, prescriptions, results and document metadata. Original photographs are accessed separately through the clinical media viewer. Store authorized exports only in the clinic's approved destination.
 
@@ -83,7 +85,7 @@ The application records the clinician's prescribing decisions; it does not choos
 
 1. Choose the patient and approved service lines. Enter quantities; the backend calculates prices and totals.
 2. Use **Record payment** for full or partial settlement. Select the currency actually received and the payment method. If payment and invoice currencies differ, enter the historical **IQD per USD** rate used for that receipt.
-3. Print the invoice and receipt after confirming the saved records. IQD and USD remain separate; do not add the balances together.
+3. Print the invoice and receipt after confirming the saved records. Set the clinic address and phone under **Settings → Edit profile** to include them on printed documents. **Print report** includes every matching detail page at the displayed cutoff, with separate currency totals. IQD and USD remain separate; do not add the balances together.
 4. Record money received before treatment as a **Patient deposit**. Use **Apply deposit** to allocate it to an invoice in the same currency.
 5. Discounts, credit notes, refunds and adjustments require the relevant approval. Never edit an issued invoice or erase a payment. Refunds preserve the original tender and recorded allocation/rate.
 6. Sell packages with the agreed number of sessions. Redeem a session only against a signed encounter for that patient. Cancel/refund unused sessions or change expiry through the authorized corrective workflows; cancelled/expired packages cannot be redeemed.

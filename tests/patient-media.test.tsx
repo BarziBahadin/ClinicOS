@@ -1,6 +1,12 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import {
+  cleanup,
+  render,
+  screen,
+  within,
+  waitFor,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { App } from "../src/App";
 import { snapshot, clinicalRecord } from "../src/lib/api";
@@ -141,7 +147,7 @@ it("opens patient photos and returns between sections without remounting into a 
   );
   expect(await screen.findByRole("img", { name: photo.title })).toBeTruthy();
   await user.click(
-    within(sections).getByRole("button", { name: "Contacts", exact: true }),
+    within(sections).getByRole("button", { name: /^Contacts$/ }),
   );
   expect(screen.queryByRole("img", { name: photo.title })).toBeNull();
   await user.click(
@@ -151,4 +157,26 @@ it("opens patient photos and returns between sections without remounting into a 
     await screen.findByRole("button", { name: /Synthetic case photo/ }),
   );
   expect(await screen.findByRole("img", { name: photo.title })).toBeTruthy();
+});
+
+it("gives the patient a separate report section with server-side filtering and a sixteen-item page", async () => {
+  render(<App />);
+  const sections = await screen.findByRole("navigation", {
+    name: "Patient sections",
+  });
+  await userEvent.click(
+    within(sections).getByRole("button", { name: "Lab reports & documents" }),
+  );
+  expect(await screen.findByLabelText("Report title")).toBeTruthy();
+  await screen.findByText("No reports uploaded yet");
+  await waitFor(() =>
+    expect(rpc).toHaveBeenCalledWith(
+      "history_page",
+      expect.objectContaining({
+        record_type: "media_documents",
+        patient_id: patientId,
+        page_size: 16,
+      }),
+    ),
+  );
 });

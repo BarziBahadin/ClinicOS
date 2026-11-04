@@ -4,7 +4,7 @@
   "description": "Bilingual dermatology clinic management",
   "main": "electron/main.cjs",
   "scripts": {
-    "dev": "vite",
+    "dev": "tsx scripts/dev.ts",
     "build": "tsc --noEmit && vite build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
@@ -14,7 +14,7 @@
     "local:setup": "tsx scripts/local-setup.ts",
     "demo:seed": "tsx scripts/demo-data.ts",
     "demo:photos": "tsx scripts/demo-photos.ts",
-    "desktop": "concurrently -k \"vite\" \"wait-on http://127.0.0.1:5173 && electron .\"",
+    "desktop": "tsx scripts/dev.ts --desktop",
     "desktop:build": "npm run build && tsx scripts/build-desktop.ts",
     "format": "prettier --write src scripts tests electron vite.config.ts tsconfig.json",
     "check": "npm run typecheck && npm test && npm run build",

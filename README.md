@@ -18,7 +18,7 @@ npm run functions:serve
 npm run dev
 ```
 
-Open **http://127.0.0.1:5173**. For the desktop shell while Vite is already running, use `npx electron .`. Alternatively, `npm run desktop` starts both.
+Open **http://127.0.0.1:5173**. Running `npm run dev` again reuses the server for this checkout and prints its address. `npm run desktop` starts the desktop shell and starts or reuses that same server. Closing the desktop stops a server it started; a separately started web server keeps running. If a different application or checkout occupies port 5173, stop it first. The port stays fixed for desktop navigation and the local media origin.
 
 `npm run setup` creates isolated local services, enables the private clinical bucket through migrations, and adds synthetic records and individual development accounts. Credentials are written to **`.local/accounts.json`**, which is ignored by Git. Development service prices and patient details are fictional. The setup script refuses hosted URLs.
 

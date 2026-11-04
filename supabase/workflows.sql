@@ -95,14 +95,14 @@ begin
  ('encounters','clinical',true),('procedures','clinical',true),('patient_documents','clinical',true),('tasks','results',true),('results','results',true),('media','media',true),('consents','clinical',true),
  ('cash_movements','finance',false),('tills','billing',false),('stock_lots','inventory.read',false),('stock_movements','inventory.read',false),('packages','billing',true),
  ('services','schedule',false),('inventory_products','inventory.read',false),('suppliers','inventory',false),('document_templates','patients',false),('clinical_facts','clinical',true),('contact_log','patients',true),('performed_services','billing',true),
- ('clinician_availability','schedule',false),('clinic_resources','schedule',false)) x(t,p,patient) where x.t=record_type;
+ ('clinician_availability','schedule',false),('clinic_resources','schedule',false)) x(t,p,patient) where x.t=case when record_type='media_documents' then 'media' else record_type end;
  if tbl is null then raise exception 'Invalid history type'; end if;
  if not clinic.allowed(perm) and not (tbl in ('stock_lots','stock_movements','inventory_products') and clinic.allowed('inventory')) and not (tbl='performed_services' and clinic.allowed('clinical')) and not (tbl in ('tills','suppliers') and clinic.allowed('finance')) then raise exception 'Permission denied' using errcode='42501'; end if;
  if patient_id is not null and (not has_patient or not exists(select 1 from clinic.patients p where p.id=history_page.patient_id and p.organization_id=o)) then raise exception 'Patient unavailable' using errcode='42501';end if;
  execute format($q$with records as materialized (
  select r.id,coalesce((to_jsonb(r)->>'created_at')::timestamptz,(to_jsonb(r)->>'opened_at')::timestamptz,'-infinity'::timestamptz) sort_at,
  (to_jsonb(r)->>'patient_id')::uuid patient_id,to_jsonb(r) value
- from clinic.%I r where r.organization_id=$1 and ($2 is null or (to_jsonb(r)->>'patient_id')::uuid in (select id from clinic.patient_ids($2)))
+ from clinic.%I r where r.organization_id=$1 and ($7<>'media_documents' or to_jsonb(r)->>'mime_type'='application/pdf') and ($2 is null or (to_jsonb(r)->>'patient_id')::uuid in (select id from clinic.patient_ids($2)))
  ),labels as materialized (
  select p.id,clinic.patient_label(p.id) name from (select distinct patient_id id from records where $5 and patient_id is not null) p
  ),page as (

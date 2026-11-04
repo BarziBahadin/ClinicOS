@@ -7,6 +7,7 @@ alter default privileges revoke execute on functions from public;
 
 create table clinic.organizations (
  id uuid primary key default gen_random_uuid(), name text not null check(length(name) between 2 and 160),
+ document_address text not null default '' check(length(document_address)<=400), document_phone text not null default '' check(length(document_phone)<=80),
  country text not null default 'IQ' check(country='IQ'), timezone text not null default 'Asia/Baghdad',
  base_currency text not null default 'IQD' check(base_currency in ('IQD','USD')),
  require_mfa boolean not null default true, allow_cross_currency boolean not null default true, created_at timestamptz not null default now()
@@ -553,7 +554,7 @@ begin
  update clinic.tills set closed_at=now(),expected=total,counted=(payload->>'counted')::numeric,reason=payload->>'reason' where id=row_till.id returning id into rid;
  when 'settings.update' then
  perform clinic.require_permission('settings');
- update clinic.organizations set name=payload->>'name',require_mfa=coalesce((payload->>'require_mfa')::boolean,true),allow_cross_currency=coalesce((payload->>'allow_cross_currency')::boolean,allow_cross_currency) where id=o returning id into rid;
+ update clinic.organizations set name=payload->>'name',document_address=coalesce(payload->>'document_address',document_address),document_phone=coalesce(payload->>'document_phone',document_phone),require_mfa=coalesce((payload->>'require_mfa')::boolean,true),allow_cross_currency=coalesce((payload->>'allow_cross_currency')::boolean,allow_cross_currency) where id=o returning id into rid;
  when 'package.sell' then
  perform clinic.require_permission('billing');
  if amt is null or (payload->>'sessions')::integer not between 1 and 1000 then raise exception 'Package amount and valid session count are required'; end if;

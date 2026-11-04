@@ -1,5 +1,26 @@
 import type { Locale } from "../domain/types";
 const ckb: Record<string, string> = {
+  "Not recorded": "تۆمار نەکراوە",
+  Payment: "پارەدان",
+  "Package sale": "فرۆشتنی پاکێج",
+  "Package refund": "گەڕاندنەوەی پارەی پاکێج",
+  "Clinic address": "ناونیشانی کلینیک",
+  "Clinic phone": "تەلەفۆنی کلینیک",
+  "Record photography consent before uploading.":
+    "پێش بارکردن ڕەزامەندیی وێنەگرتن تۆمار بکە.",
+  "Choose a file up to 10 MB": "فایلێک هەڵبژێرە تا ١٠ مێگابایت",
+  "Issued by": "دەرکراوە لەلایەن",
+  "Printed by": "چاپکراوە لەلایەن",
+  "Unit price": "نرخی یەکە",
+  "Refund receipt": "پسووڵەی گەڕاندنەوەی پارە",
+  "Amount refunded": "بڕی پارەی گەڕێندراوە",
+  "Applied deposit": "پێشەکیی بەکارهاتوو",
+  "Additional instructions": "ڕێنمایی زیاتر",
+  "Print report": "چاپکردنی ڕاپۆرت",
+  "All matching records are included. IQD and USD remain separate.":
+    "هەموو تۆمارە گونجاوەکان لەخۆدەگرێت. دینار و دۆلار بە جیا دەمێننەوە.",
+  "Balance reflects payments, refunds and credits at the time of printing.":
+    "باڵانس پارەدان و گەڕاندنەوەی پارە و کرێدیتەکان تا کاتی چاپکردن نیشان دەدات.",
   "Reconciliation history": "مێژووی بەراوردکردن",
   "Accounting batches": "کۆمەڵە هەناردە ژمێریارییەکان",
   Reference: "ژمارەی ئاماژە",
@@ -357,6 +378,26 @@ const ckb: Record<string, string> = {
   Patients: "نەخۆشەکان",
   Appointments: "نۆرەکان",
   "Clinical records": "تۆمارە پزیشکییەکان",
+  "Visits & treatment": "سەردان و چارەسەر",
+  "Consent & care documents": "ڕەزامەندی و بەڵگەکانی چارەسەر",
+  "Lab reports & documents": "ڕاپۆرتی تاقیگە و بەڵگەکان",
+  "Report title": "ناونیشانی ڕاپۆرت",
+  "For example: Blood test — November 2026":
+    "بۆ نموونە: پشکنینی خوێن — تشرینی دووەمی ٢٠٢٦",
+  "Upload PDF report": "بارکردنی ڕاپۆرتی PDF",
+  "Choose a PDF report": "ڕاپۆرتێکی PDF هەڵبژێرە",
+  "Keep lab tests and scanned reports in the patient profile. Choose a PDF saved on this computer (up to 10 MB).":
+    "ئەنجامی پشکنین و ڕاپۆرتە سکانکراوەکان لە پڕۆفایلی نەخۆشدا هەڵبگرە. فایلێکی PDF لەم کۆمپیوتەرە هەڵبژێرە (تا ١٠ مێگابایت).",
+  "Browse photos and documents. Select a tile to open the gallery viewer.":
+    "وێنە و بەڵگەکان ببینە. یەکێکیان هەڵبژێرە بۆ کردنەوەی لە گەلەریدا.",
+  "No reports uploaded yet": "هێشتا هیچ ڕاپۆرتێک بار نەکراوە",
+  "Give the report a clear title, then upload a PDF from this computer.":
+    "ناونیشانێکی ڕوون بۆ ڕاپۆرتەکە بنووسە، پاشان PDF لەم کۆمپیوتەرە بار بکە.",
+  Photo: "وێنە",
+  "PDF report": "ڕاپۆرتی PDF",
+  "Open PDF": "کردنەوەی PDF",
+  "Unable to load image. Retry to refresh access.":
+    "وێنەکە بار نەکرا. دووبارە هەوڵ بدەرەوە بۆ نوێکردنەوەی دەستگەیشتن.",
   "Clinical media": "وێنە و بەڵگەکان",
   "Results & follow-up": "ئەنجام و بەدواداچوون",
   Billing: "پسووڵەکان",

@@ -2,7 +2,7 @@
 
 Open the macOS preview at `release/mac-arm64/ClinicOS.app`. The app now uses the supplied **Stormy Morning** palette: `#6A89A7`, `#BDDDFC`, `#88BDF2` and `#384959`, with readable light and dark surfaces. The desktop icon matches the sidebar stethoscope.
 
-Existing individual development accounts are unchanged: `owner`, `doctor`, `receptionist`, `administrator` and `accountant`. Their local passwords are in ignored `.local/accounts.json`. Staff email is not required.
+The individual local demo accounts are `owner`, `doctor`, `receptionist`, `administrator` and `accountant`. Each uses the password `admin`, also recorded in ignored `.local/accounts.json`. Staff email is not required. This password applies only to the current local demo; new development setups generate individual passwords.
 
 The added records are prefixed **DEMO**. All names, numbers, clinical notes, consent selections, prescriptions and financial activity are fictional; no calls, messages, actual treatments or external payments took place. Do not dial the demo phone numbers. The demonstration is in the existing local development clinic; existing records were preserved.
 

@@ -289,6 +289,7 @@ export function Treatments({ data, t, locale, setAction }: Props) {
                           `${t("Version")}: ${row.version}`,
                         ],
                         row.language as Locale,
+                        { clinic: data.organization },
                       )
                     }
                   >
@@ -817,20 +818,7 @@ export function PatientTools({
                       <button
                         className="button secondary"
                         onClick={() =>
-                          printDocument(
-                            `${data.organization.name} · ${t("Prescription")}`,
-                            [
-                              ...printHeader(e),
-                              `${t("Date")}: ${formatDate(e.signed_at, true, locale)}`,
-                              `${t("Clinician")}: ${(e.identity_snapshot as Row | undefined)?.clinician_name ?? data.members.find((m) => m.user_id === e.doctor_id)?.display_name ?? "—"}`,
-                              ...meds.map(
-                                (m) =>
-                                  `${m.medicine} ${m.strength}\n${t("Dose")}: ${m.dose}\n${t("Route")}: ${m.route} · ${t("Frequency")}: ${m.frequency} · ${t("Duration")}: ${m.duration}\n${t("Quantity")}: ${m.quantity}\n${m.instructions}`,
-                              ),
-                              String(e.prescriptions ?? ""),
-                            ],
-                            locale,
-                          )
+                          printPrescription(e, patient, data, t, locale)
                         }
                       >
                         {t("Print prescription")}
@@ -861,11 +849,13 @@ export function PatientTools({
                       `${data.organization.name} · ${t("Aftercare")}`,
                       [
                         ...printHeader(p),
+                        `${t("Clinician")}: ${(p.identity_snapshot as Row | undefined)?.clinician_name ?? data.members.find((m) => m.user_id === p.performed_by)?.display_name ?? "—"}`,
                         `${t("Procedure")}: ${p.name}`,
                         `${t("Date")}: ${formatDate(p.created_at, true, locale)}`,
                         String(p.aftercare),
                       ],
                       locale,
+                      { clinic: data.organization },
                     )
                   }
                 >
@@ -904,6 +894,7 @@ export function PatientTools({
                         String(c.evidence),
                       ],
                       locale,
+                      { clinic: data.organization },
                     )
                   }
                 >
@@ -1052,6 +1043,7 @@ function PatientDocuments({
                       : []),
                   ],
                   locale,
+                  { clinic: data.organization },
                 )
               }
             >
@@ -1091,4 +1083,69 @@ function documentIdentity(row: Row, patient: Patient, t: T) {
     `${t(identity?.full_name ? "Patient" : "Current patient identity")}: ${identity?.full_name ?? patient.full_name}`,
     `${t("Patient number")}: ${identity?.patient_number ?? patient.patient_number}`,
   ];
+}
+
+export function printPrescription(
+  e: Row,
+  patient: Patient,
+  data: Snapshot,
+  t: T,
+  locale: Locale,
+) {
+  const meds = (e.prescription_items ?? []) as Row[];
+  printDocument(t("Prescription"), [], locale, {
+    clinic: data.organization,
+    metadata: [
+      [
+        t(
+          (e.identity_snapshot as Row | undefined)?.full_name
+            ? "Patient"
+            : "Current patient identity",
+        ),
+        String(
+          (e.identity_snapshot as Row | undefined)?.full_name ??
+            patient.full_name,
+        ),
+      ],
+      [
+        t("Patient number"),
+        String(
+          (e.identity_snapshot as Row | undefined)?.patient_number ??
+            patient.patient_number,
+        ),
+      ],
+      [t("Date"), formatDate(e.signed_at, true, locale)],
+      [
+        t("Clinician"),
+        String(
+          (e.identity_snapshot as Row | undefined)?.clinician_name ??
+            data.members.find((m) => m.user_id === e.doctor_id)?.display_name ??
+            "—",
+        ),
+      ],
+      [t("Reference"), e.id],
+    ],
+    sections: [
+      ...meds.map((m, index) => ({
+        title: `${index + 1}. ${m.medicine} ${m.strength}`,
+        fields: [
+          [t("Dose"), String(m.dose)],
+          [t("Route"), String(m.route)],
+          [t("Frequency"), String(m.frequency)],
+          [t("Duration"), String(m.duration)],
+          [t("Quantity"), String(m.quantity)],
+        ] as [string, string][],
+        lines: [String(m.instructions ?? "")],
+      })),
+      ...(e.prescriptions
+        ? [
+            {
+              title: t("Additional instructions"),
+              lines: [String(e.prescriptions)],
+            },
+          ]
+        : []),
+    ],
+    signature: `${t("Signed")}: ${(e.identity_snapshot as Row | undefined)?.clinician_name ?? data.members.find((m) => m.user_id === e.doctor_id)?.display_name ?? "—"} · ${formatDate(e.signed_at, true, locale)}`,
+  });
 }

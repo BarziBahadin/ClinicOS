@@ -5,6 +5,7 @@ import { DataTable, Empty, ErrorMessage, type T } from "../components/ui";
 import type { Currency, Locale, Row, Snapshot } from "../domain/types";
 import { day, formatDate } from "../lib/format";
 import { money } from "../domain/money";
+import { rpc } from "../lib/api";
 import { printDocument } from "../lib/print";
 const kinds: Record<string, string> = {
   receivables: "Receivables and aging",
@@ -94,17 +95,28 @@ export function FinancialReports({
 }) {
   const today = day(new Date().toISOString());
   const snapshotTime = useRef<string | null>(null);
+  const printGeneration = useRef(0);
+  const [printing, setPrinting] = useState(false);
+
   const [chosenReport, setChosenReport] = useState("receivables");
   const [filters, setFilters] = useState({
       type: "receivables",
       from: today.slice(0, 7) + "-01",
       to: today,
       patientId: "",
+      patientLabel: "",
     }),
     [page, setPage] = useState(0),
     [report, setReport] = useState<Report | null>(null),
     [error, setError] = useState(""),
     [loading, setLoading] = useState(false);
+  useLayoutEffect(() => {
+    printGeneration.current++;
+    setPrinting(false);
+    return () => {
+      printGeneration.current++;
+    };
+  }, [data, filters, page]);
   useLayoutEffect(() => {
     snapshotTime.current = null;
     setPage(0);
@@ -143,7 +155,111 @@ export function FinancialReports({
       ? money(row[key], row.currency as Currency, locale)
       : key === "date"
         ? formatDate(row[key], false, locale)
-        : String(row[key] ?? "—");
+        : ["category", "method"].includes(key)
+          ? t(
+              (
+                {
+                  invoice: "Invoice",
+                  payment: "Payment",
+                  refund: "Refund",
+                  credit: "Credit note",
+                  deposit: "Deposit",
+                  deposit_application: "Applied deposit",
+                  patient_deposit: "Patient deposit",
+                  treatment_package: "Treatment packages",
+                  package_sale: "Package sale",
+                  package_refund: "Package refund",
+                  cash: "Cash",
+                  bank: "Bank",
+                  card: "Card",
+                } as Record<string, string>
+              )[String(row[key])] ?? String(row[key] ?? "—"),
+            )
+          : String(row[key] ?? "—");
+  async function printReport() {
+    if (!report || printing) return;
+    const generation = printGeneration.current;
+    setPrinting(true);
+    setError("");
+    try {
+      let result = report;
+      let items: Row[] = [];
+      let nextPage = 0;
+      do {
+        result =
+          nextPage === page
+            ? report
+            : await rpc<Report>("financial_report", {
+                report_type: filters.type,
+                from_day: filters.from,
+                to_day: filters.to,
+                patient_id: filters.patientId || null,
+                page_number: nextPage,
+                as_at: report.as_at,
+              });
+        if (generation !== printGeneration.current) return;
+        items = items.concat(result.items);
+        nextPage++;
+      } while (result.has_more);
+      printDocument(t(kinds[filters.type]), [], locale, {
+        clinic: data.organization,
+        metadata: [
+          [t("From"), formatDate(filters.from, false, locale)],
+          [t("To"), formatDate(filters.to, false, locale)],
+          [t("Report cutoff"), formatDate(report.as_at, true, locale)],
+          [t("Records"), String(report.records)],
+          [t("Printed by"), data.membership.display_name],
+          ...(filters.patientId
+            ? [[t("Patient account"), filters.patientLabel] as [string, string]]
+            : []),
+        ],
+        table: {
+          columns: heads.map(([key, label]) => ({
+            label: t(label),
+            numeric: [
+              "amount",
+              "opening",
+              "expected",
+              "counted",
+              "transactions",
+              "age_days",
+            ].includes(key),
+          })),
+          rows: items.map((row) => heads.map(([key]) => cell(row, key))),
+        },
+        totals: [
+          ...report.opening_balances.map((total): [string, string] => [
+            t("Opening invoiced balance"),
+            money(total.amount, total.currency, locale),
+          ]),
+          ...report.totals.map((total): [string, string] => [
+            t(
+              filters.type === "patient_statement"
+                ? "Period movement"
+                : "Total",
+            ),
+            money(total.amount, total.currency, locale),
+          ]),
+          ...report.prepayment_totals.map((total): [string, string] => [
+            t("Prepayments — shown separately"),
+            money(total.amount, total.currency, locale),
+          ]),
+          ...report.closing_balances.map((total): [string, string] => [
+            t("Closing invoiced balance"),
+            money(total.amount, total.currency, locale),
+          ]),
+        ],
+        note: t(
+          "All matching records are included. IQD and USD remain separate.",
+        ),
+      });
+    } catch (error) {
+      if (generation === printGeneration.current)
+        setError(error instanceof Error ? error.message : String(error));
+    } finally {
+      if (generation === printGeneration.current) setPrinting(false);
+    }
+  }
   return (
     <section className="panel">
       <div className="panel-head">
@@ -160,6 +276,10 @@ export function FinancialReports({
             from: String(f.get("from")),
             to: String(f.get("to")),
             patientId: String(f.get("patient_id") ?? ""),
+            patientLabel:
+              e.currentTarget.querySelector<HTMLSelectElement>(
+                'select[name="patient_id"]',
+              )?.selectedOptions[0]?.textContent ?? "",
           });
         }}
       >
@@ -300,40 +420,10 @@ export function FinancialReports({
             </button>
             <button
               className="button secondary"
-              onClick={() =>
-                printDocument(
-                  `${data.organization.name} · ${t(kinds[filters.type])}`,
-                  [
-                    `${filters.from} — ${filters.to}`,
-                    `${t("Page")}: ${page + 1}`,
-                    `${t("Report cutoff")}: ${formatDate(report.as_at, true, locale)}`,
-                    ...report.opening_balances.map(
-                      (total) =>
-                        `${t("Opening invoiced balance")}: ${money(total.amount, total.currency, locale)}`,
-                    ),
-                    ...report.closing_balances.map(
-                      (total) =>
-                        `${t("Closing invoiced balance")}: ${money(total.amount, total.currency, locale)}`,
-                    ),
-                    ...report.prepayment_totals.map(
-                      (total) =>
-                        `${t("Prepayments — shown separately")}: ${money(total.amount, total.currency, locale)}`,
-                    ),
-                    ...report.totals.map(
-                      (total) =>
-                        `${t("Total")}: ${money(total.amount, total.currency, locale)}`,
-                    ),
-                    ...report.items.map((row) =>
-                      heads
-                        .map(([key, label]) => `${t(label)}: ${cell(row, key)}`)
-                        .join(" · "),
-                    ),
-                  ],
-                  locale,
-                )
-              }
+              disabled={loading || printing}
+              onClick={() => void printReport()}
             >
-              {t("Print this page")}
+              {t(printing ? "Loading…" : "Print report")}
             </button>
           </div>
         </>
